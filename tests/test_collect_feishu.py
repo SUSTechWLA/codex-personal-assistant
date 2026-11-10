@@ -39,7 +39,9 @@ else: sys.exit(5)
 class CollectorTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.root = Path(self.tmp.name)
+        # Compare the same canonical paths used by native CLI discovery even
+        # when a Windows runner's TEMP contains an 8.3 directory alias.
+        self.root = Path(self.tmp.name).resolve()
         self.fake = self.root / "fake_cli.py"
         self.fake.write_text(FAKE, encoding="utf-8")
 

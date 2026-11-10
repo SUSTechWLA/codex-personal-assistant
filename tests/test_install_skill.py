@@ -16,7 +16,9 @@ import install_skill
 class InstallSkillTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.base = Path(self.temp.name)
+        # Windows runners may expose an 8.3 alias in TEMP; the installer
+        # deliberately returns canonical paths, so normalize this fixture too.
+        self.base = Path(self.temp.name).resolve()
         self.project = self.base / "project with spaces"
         self.project.mkdir()
         (self.project / "assistant.py").write_text("# test fixture\n", encoding="utf-8")
