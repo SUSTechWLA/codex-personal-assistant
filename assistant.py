@@ -21,7 +21,7 @@ DEFAULT_CONFIG = {
     "capacity_ratio": 0.7,
     "min_confidence": 0.8,
     "source_freshness_hours": 24,
-    "required_sources": ["feishu_messages", "feishu_calendar", "feishu_tasks", "feishu_mail", "gmail", "google_calendar"],
+    "required_sources": ["codex_activity", "feishu_messages", "feishu_calendar", "feishu_tasks", "feishu_mail", "gmail", "google_calendar"],
     "profile": {"name": None, "aliases": ["self"]},
     "integrations": {
         "feishu": {
@@ -548,6 +548,11 @@ def main(argv=None):
     plan_cmd = commands.add_parser("plan")
     plan_cmd.add_argument("--date", type=date.fromisoformat)
     plan_cmd.add_argument("--now", type=parse_dt)
+    journal_cmd = commands.add_parser("log-work", help="导入由 Codex 核实的当日工作事实与建议，不修改任务状态")
+    journal_cmd.add_argument("file", type=Path)
+    review_cmd = commands.add_parser("daily-review", help="生成有来源的全天工作日报和建议")
+    review_cmd.add_argument("--date", type=date.fromisoformat)
+    review_cmd.add_argument("--now", type=parse_dt)
     collect_cmd = commands.add_parser("collect-feishu", help="使用已授权的官方 CLI 只读采集飞书，不登录或切换机器人身份")
     collect_cmd.add_argument("--start", required=True, type=parse_dt)
     collect_cmd.add_argument("--end", required=True, type=parse_dt)
@@ -563,6 +568,14 @@ def main(argv=None):
             result = ingest(root, json.loads(args.file.read_text(encoding="utf-8-sig")))
         elif args.command == "update":
             result = update_status(root, args.id, args.status)
+        elif args.command == "log-work":
+            from daily_review import log_work
+            result = log_work(root, json.loads(args.file.read_text(encoding="utf-8-sig")), load_config(root))
+        elif args.command == "daily-review":
+            from daily_review import write_review
+            data = status(root)
+            now = args.now or datetime.now(timezone.utc)
+            result = write_review(root, args.date or now.astimezone(get_tz(data["config"]["timezone"])).date(), now, data)
         elif args.command == "collect-feishu":
             load_config(root)
             from collect_feishu import collect

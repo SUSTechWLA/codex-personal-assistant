@@ -29,6 +29,7 @@ elif 'task' in args:
     print(json.dumps({'data':{'tasks':[{'id':'t1'}],'has_more':True,'next_page_token':'more'}}))
 elif 'mail' in args:
     assert args[args.index('--user-mailbox-id')+1]=='me'
+    assert args[args.index('--folder-id')+1]=='INBOX'
     assert args[args.index('--page-size')+1]=='20'
     print(json.dumps({'code':9999,'error':'Unauthorized https://example.org/oauth/?code=secret-auth-code'}))
     sys.exit(1)
@@ -114,6 +115,58 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual("partial", metadata["status"])
         metadata = collector.response_metadata({"data": {"items": [], "has_more": False}})
         self.assertEqual("ok", metadata["status"])
+
+    def test_agenda_shortcut_array_is_counted_without_claiming_full_coverage(self):
+        envelope = {"ok": True, "identity": "user", "data": [], "meta": {}}
+        metadata = collector.response_metadata(envelope, "feishu_calendar")
+        self.assertEqual(0, metadata["count"])
+        self.assertEqual("partial", metadata["status"])
+        envelope["data"] = [{"id": "synthetic-event", "has_more": False,
+                             "items": [], "description": "untrusted event content"}]
+        metadata = collector.response_metadata(envelope, "feishu_calendar")
+        self.assertEqual(1, metadata["count"])
+        self.assertIsNone(metadata["has_more"])
+        self.assertEqual("partial", metadata["status"])
+
+    def test_empty_nullable_task_page_is_complete_only_with_explicit_exhaustion(self):
+        envelope = {"ok": True, "identity": "user", "data": {
+            "has_more": False, "items": None, "page_token": ""}}
+        metadata = collector.response_metadata(envelope, "feishu_tasks")
+        self.assertEqual(0, metadata["count"])
+        self.assertEqual("ok", metadata["status"])
+        envelope["data"]["page_token"] = "next-synthetic-page"
+        self.assertEqual("partial", collector.response_metadata(envelope, "feishu_tasks")["status"])
+        envelope["data"] = {"has_more": False}
+        metadata = collector.response_metadata(envelope, "feishu_tasks")
+        self.assertIsNone(metadata["count"])
+        self.assertEqual("partial", metadata["status"])
+        envelope["data"] = {"items": None, "has_more": True}
+        metadata = collector.response_metadata(envelope, "feishu_tasks")
+        self.assertIsNone(metadata["count"])
+        self.assertEqual("partial", metadata["status"])
+
+    def test_shortcut_shapes_are_normalized_in_persisted_collection_results(self):
+        self.fake.write_text(
+            "import json,sys\n"
+            "args=sys.argv[1:]\n"
+            "payload=[] if 'calendar' in args else {'items':None,'has_more':False,'page_token':''}\n"
+            "print(json.dumps({'ok':True,'identity':'user','data':payload,'meta':{}}))\n",
+            encoding="utf-8")
+        sources = {s["id"]: s for s in self.collect()["sources"]}
+        self.assertEqual((0, "partial"), (sources["feishu_calendar"]["count"], sources["feishu_calendar"]["status"]))
+        self.assertEqual((0, "ok"), (sources["feishu_tasks"]["count"], sources["feishu_tasks"]["status"]))
+
+    def test_mail_collection_selects_required_inbox_folder(self):
+        self.fake.write_text(
+            "import json,sys\n"
+            "args=sys.argv[1:]\n"
+            "if 'mail' in args and ('--folder-id' not in args or args[args.index('--folder-id')+1]!='INBOX'):\n"
+            "    sys.exit(1)\n"
+            "print(json.dumps({'ok':True,'identity':'user','data':{'items':[],'has_more':False}}))\n",
+            encoding="utf-8")
+        source = next(s for s in self.collect()["sources"] if s["id"] == "feishu_mail")
+        self.assertEqual("ok", source["status"])
+        self.assertEqual(0, source["count"])
 
     def test_range_and_profile_reject_shell_characters_before_running(self):
         for profile in ["bad & command", "bad;command", "a\ncommand"]:

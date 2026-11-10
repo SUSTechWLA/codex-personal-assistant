@@ -7,7 +7,7 @@
   "source_freshness_hours": 24,
   "required_sources": [
     "feishu_messages", "feishu_calendar", "feishu_tasks", "feishu_mail",
-    "gmail", "google_calendar"
+    "gmail", "google_calendar", "codex_activity"
   ],
   "profile": {"name": null, "aliases": ["self"]},
   "integrations": {

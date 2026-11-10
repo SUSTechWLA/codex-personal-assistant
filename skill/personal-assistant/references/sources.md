@@ -1,12 +1,32 @@
 # 信息来源与覆盖
 
-每轮先检查配置、当前工具和授权状态。来源 ID 使用 `feishu_messages`、`feishu_calendar`、`feishu_tasks`、`feishu_mail`、`gmail`、`google_calendar`；只启用用户需要的来源。不要把安装 CLI、应用配置成功或连接插件本身当作数据已读成功。
+把核实后的导入JSON保存在项目内被Git忽略的`data/`目录，先创建目录再写入：任务/日程用`data/reviewed-summary.json`，工作记录用`data/reviewed-work.json`。不要把真实输入存到仓库根目录。
+
+每轮先检查配置、当前工具和授权状态。来源 ID 使用 `codex_activity`、`feishu_messages`、`feishu_calendar`、`feishu_tasks`、`feishu_mail`、`gmail`、`google_calendar`；只启用用户需要的来源。不要把安装 CLI、应用配置成功或连接插件本身当作数据已读成功。
+
+## Codex 工作活动
+
+运行时从当前工具目录动态发现 `list_threads`、`read_thread` 等 Codex 聊天读取能力，不假设工具前缀、账号或文件位置永远不变。按配置时区确定当天范围，先列候选，再只读取当天相关工作聊天/项目：每轮最多 20 个，每个最近 3 个 turn，需要核实最后结果时最多 5 个。置顶、标题、更新时间和运行状态只用于选择候选，不能当作工作事实；排除无关的私人旧聊天，不把可见聊天全量归档。
+
+只提取相关 turn 中的 `userMessage`、`final_answer` 和选定产物路径，忽略内部推理、命令文本与工具元数据；即使 `read_thread` 设为不含输出，返回中仍可能存在大量这类元数据，不得原样归档或写进日报。需要证实时，再针对选定产物、测试结果或 commit 做有限只读核对。分开记录“请求做什么”“做到了哪里”“什么证据支持完成”。线程显示 idle/complete、正常结束或助手声称完成，都不能单独证明交付；工具不可用、结果被截断或日期不明时记录 `partial/unavailable`，不报告当天完整工作已覆盖。
+
+助手自检、自动简报、重复提醒和来源检查不能计为用户的研发成果。用户明确安排的助理工具建设可单独记录为工具/流程工作，不能改写成产品研发已交付。同一结果在多个聊天或简报中被转述时沿用稳定工作记录 ID，不重复累计。
+
+可在已识别且获授权的工作仓库中只读查看当天 `git log`、`git status` 和相关 commit/测试结果补证。commit 证明提交内容而不自动证明测试通过或用户验收；文件修改时间、dirty 状态、未提交 diff 和运行时长都不能证明完成。只保存必要的摘要、真实路径/聊天定位与证据，不导出整段私人会话，不向公共仓库、第三方聊天或外部服务发送工作资料。
+
+用 `codex_activity` 来源记录本次真实时间窗、读取的工作聊天数量、turn 上限及仓库范围。达到限额、未读后续 turn 或只检查部分项目时保持 `partial`；只有明确限定且实际读完的范围才可为 `ok`。工作记录通过 `log-work` 单独保存，来源覆盖仍按 `sources` schema 入账。
 
 ## 飞书官方 CLI
 
 使用 [larksuite/cli](https://github.com/larksuite/cli)。从 `config.json` 的 `integrations.feishu.profile` 获取 profile；未设置时使用 `codex-assistant`。所有调用明确选择 profile，所有业务读取明确 `--as user`，并核对实际用户和组织。用户身份未就绪时记 `unavailable`；`bot ready` 不能替代用户授权。
 
 先用 `--help`、业务域帮助和 `schema` 核实当前版本参数、身份与权限。首次授权交给用户在 CLI 给出的飞书官方页面完成，使用实际功能所需的精确只读 scopes，保留默认安全保护。`--recommend` 可能请求所有业务域，不能当作最小授权。不要打印、导出或存储 token、应用密钥或临时设备码；后续重新授权时生成新链接。
+
+本项目核验的 CLI `1.0.99` 在消息快捷搜索前置权限检查中仍要求 `im:message.reactions:read`，即使传入 `--no-reactions` 也不能避开。该权限及邮件明细三个读取权限属于按需增强，基础采集不要求先补这四项权限。仅当快捷搜索明确因缺少 `im:message.reactions:read` 失败时，封装用已有 `im:message:readonly` 等权限通过官方 CLI 的基础 GET 消息历史接口 `/open-apis/im/v1/messages` 读取受限会话；不绕过服务端权限检查、不发起授权、不切 Bot、不下载程序，其他认证或权限错误仍为不可用。
+
+受限读取通过官方会话列表选择最多 10 个近期活跃的非机器人会话，每会话最多 20 条、总计 100 条，并沿用整个消息来源 45 秒和 2 MiB 上限；结果始终 `partial`，不能说成全局搜索或完整历史。不要为消除这个覆盖提示而自动扩大授权。
+
+邮件 `mail:user_mailbox.message:readonly` 用于列表，读取主题、地址与正文还分别需要 `mail:user_mailbox.message.subject:read`、`mail:user_mailbox.message.address:read`、`mail:user_mailbox.message.body:read`。这些均为只读并按需申请；用户选择暂不追加时保持正文未读，不反复要求补权限，更不能根据 ID 列表生成正文摘要。基础与可选授权说明在项目 `docs/setup-feishu.md`。
 
 如果 `integrations.feishu.authorization_status` 是 `pending_admin_approval`，或用户已明确等待企业审批，例行运行不重复采集、不重复启动 OAuth、不催审批。继续邮箱与本地工作；用户通知审批通过后再核验身份、权限和实际调用，审批本身不等于所有接口可读。
 
@@ -18,14 +38,14 @@
 python3 assistant.py collect-feishu --start <带时区ISO> --end <带时区ISO> --profile <已配置profile>
 ```
 
-Windows 可把入口替换为 `./run-assistant.ps1 collect-feishu`。用真实带时区的起止时间替换参数，不把占位文本直接执行。封装只查询消息、主日历、本人未完成任务及邮箱列表；每源有时间、字节和分页上限。原始快照位于被忽略的 `data/feishu/`，命令返回真实文件路径和覆盖状态。来源覆盖可以自动入账，任务和日程不会自动覆盖。
+Windows 可把入口替换为 `./run-assistant.ps1 collect-feishu`。用真实带时区的起止时间替换参数，不把占位文本直接执行。封装只查询消息、主日历、本人未完成任务及收件箱 `INBOX` 邮件 ID 列表；每源有时间和字节上限，消息/任务/收件箱列表还限制分页。原始快照位于被忽略的 `data/feishu/`，命令返回真实文件路径和覆盖状态。来源覆盖可以自动入账，任务和日程不会自动覆盖。
 
 Codex 必须读取成功来源返回的 raw 文件，核对成功标识、查询范围和分页，再按助理 schema 提炼 `tasks/events` 并另行 `ingest`。raw 不是助理导入 JSON。不要因为采集命令退出或文件存在就报告全量同步；不要把原始整封邮件、MIME、HTML或认证信息抄到聊天中。
 
-- 消息搜索不等于完整会话。对指派、承诺和日期读取必要上下文，保留不可变消息/会话 ID；缺上下文则不确定。
-- 日历包括实际工作日历、重复实例、全天忙碌、取消和透明状态。封装的主日历 agenda 若无法确认完整分页，保守保留 `partial`；它不代表全部共享日历。
-- 本人任务与其他人的依赖分开；核对责任、完成、截止，不能因其他人被 @ 就分配给用户。
-- 邮箱封装只列邮件 ID；按当前 CLI schema 再读取候选邮件正文和后续回复，才能总结或提炼待办。未开通企业邮箱或缺权限时记录缺口，不猜地址。
+- 消息搜索或受限会话历史都不等于完整会话。对指派、承诺和日期读取必要上下文，保留不可变消息/会话 ID；缺上下文则不确定。受限会话路径无论返回数量多少都保留 `partial`，不推进全局搜索水位。
+- 日历包括实际工作日历、重复实例、全天忙碌、取消和透明状态。封装的主日历 agenda 若无法确认完整分页，保守保留 `partial`；成功响应中的 `data:[]` 可计为 0 项，但不能仅据此升级完整性，它也不代表全部共享日历。
+- 本人任务与其他人的依赖分开；核对责任、完成、截止，不能因其他人被 @ 就分配给用户。成功任务响应中 `items:null` 且 `has_more:false` 可表示该限定查询完整成功、数量为 0；认证错误仍是不可用，不能改写为空列表。
+- 邮箱封装限定 `INBOX`，只列邮件 ID，不是全邮箱或正文快照；按当前 CLI schema 再读取候选主题、地址、正文和后续回复，才能总结或提炼待办。未开通企业邮箱或缺少相应明细只读权限时记录缺口，不猜地址。
 - 文档和 OKR 仅在与工作相关、实际已授权时按需获取，不自动扩大到全域读写权限。
 
 ## Gmail 与 Google Calendar

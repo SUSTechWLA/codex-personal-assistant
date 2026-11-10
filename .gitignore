@@ -1,6 +1,8 @@
 # Local preferences, identity, credentials, and captured work data
 config.json
 data/
+reviewed-summary.json
+reviewed-work.json
 reports/
 plans/
 *.sqlite*

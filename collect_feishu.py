@@ -12,10 +12,16 @@ import re
 import shutil
 import subprocess
 import threading
+import time
+from urllib.parse import parse_qs, urlsplit
 
 MAX_BYTES = 2 * 1024 * 1024
 TIMEOUT_SECONDS = 45
 PAGE_LIMIT = 5
+REACTION_SCOPE = "im:message.reactions:read"
+HISTORY_PATH = "/open-apis/im/v1/messages"
+FALLBACK_CHAT_LIMIT = 10
+FALLBACK_MESSAGE_LIMIT = 100
 SECRET_KEYS = {"access_token", "refresh_token", "tenant_access_token", "app_access_token", "user_access_token", "id_token", "app_secret", "client_secret", "authorization", "password", "verification_code", "otp"}
 ITEM_KEYS = {"items", "messages", "tasks", "events", "message_list", "task_list", "event_list"}
 
@@ -78,8 +84,8 @@ def source_specs(start, end):
             "scope": f"本人未完成任务；最多 {PAGE_LIMIT} 页；不按采集起止时间过滤",
         },
         "feishu_mail": {
-            "args": ["mail", "user_mailbox.messages", "list", "--user-mailbox-id", "me", "--page-size", "20", "--page-all", "--page-limit", str(PAGE_LIMIT)],
-            "scope": f"本人邮箱消息列表；最多 {PAGE_LIMIT} 页，每页20；无日期过滤、未读取邮件正文",
+            "args": ["mail", "user_mailbox.messages", "list", "--user-mailbox-id", "me", "--folder-id", "INBOX", "--page-size", "20", "--page-all", "--page-limit", str(PAGE_LIMIT)],
+            "scope": f"本人收件箱邮件消息列表（INBOX）；最多 {PAGE_LIMIT} 页，每页20；无日期过滤、未读取邮件正文，不代表其他文件夹",
         },
     }
 
@@ -147,9 +153,18 @@ def redact(value):
     return value
 
 
-def response_metadata(value):
+def response_metadata(value, source_id=None):
     """Conservative pagination: explicit exhaustion plus recognizable items only."""
     flags, tokens, counts, page_counts = [], [], [], []
+    envelope = value if isinstance(value, dict) else {}
+    task_data = envelope.get("data")
+    # lark-cli 1.0.99 returns an empty task page as items:null, not [].
+    # Interpret that only in the observed successful user-task response shape;
+    # a missing field or a null list in an unknown response is not an empty result.
+    empty_task_page = (source_id == "feishu_tasks" and envelope.get("ok") is True
+                       and envelope.get("identity") == "user" and isinstance(task_data, dict)
+                       and "items" in task_data and task_data["items"] is None
+                       and task_data.get("has_more") is False)
     def walk(item):
         if isinstance(item, list):
             for child in item:
@@ -159,7 +174,7 @@ def response_metadata(value):
                 lower = key.casefold()
                 if lower in {"has_more", "hasmore"} and type(child) is bool:
                     flags.append(child)
-                elif lower in {"next_page_token", "nextpagetoken", "next_cursor", "next_page"} and child:
+                elif lower in {"page_token", "next_page_token", "nextpagetoken", "next_cursor", "next_page"} and child:
                     tokens.append(True)
                 elif lower in {"pages_fetched", "page_count", "pages_count"} and type(child) is int:
                     page_counts.append(child)
@@ -167,6 +182,15 @@ def response_metadata(value):
                     counts.append(len(child))
                     # Source records may contain arbitrary JSON; do not interpret
                     # their message text/attachments as collection metadata.
+                elif lower == "items" and item is task_data and empty_task_page:
+                    counts.append(0)
+                elif lower == "data" and isinstance(child, list):
+                    # The agenda shortcut returns {ok:true,identity:user,data:[],meta:{}}.
+                    # Count its records, but do not invent pagination evidence or
+                    # interpret fields inside event records as page metadata.
+                    if (item is value and source_id == "feishu_calendar"
+                            and envelope.get("ok") is True and envelope.get("identity") == "user"):
+                        counts.append(len(child))
                 elif isinstance(child, (dict, list)):
                     walk(child)
     walk(value)
@@ -202,11 +226,178 @@ def safe_error_metadata(value):
     return result
 
 
+class ReadBudget:
+    """Share one source's deadline and byte allowance across all CLI calls."""
+    def __init__(self, command, timeout_seconds, max_bytes):
+        if not 0 < timeout_seconds <= TIMEOUT_SECONDS or not 0 < max_bytes <= MAX_BYTES:
+            raise ValueError("采集限制超过许可范围")
+        self.command = command
+        self.deadline = time.monotonic() + timeout_seconds
+        self.max_bytes = max_bytes
+        self.remaining_bytes = max_bytes
+        self.limit = None
+
+    def run(self, args):
+        remaining_time = self.deadline - time.monotonic()
+        if self.limit or remaining_time <= 0 or self.remaining_bytes <= 0:
+            self.limit = self.limit or ("timeout" if remaining_time <= 0 else "output_limit")
+            return {"error": self.limit, "returncode": None}
+        result = run_bounded([*self.command, *args], min(remaining_time, TIMEOUT_SECONDS), self.remaining_bytes)
+        self.remaining_bytes -= len(result.get("stdout", b"")) + len(result.get("stderr", b""))
+        if result.get("error") in {"timeout", "output_limit"}:
+            self.limit = result["error"]
+            if self.limit == "output_limit":
+                self.remaining_bytes = 0
+        return result
+
+
+def only_reaction_scope_missing(value):
+    """This fallback never handles other missing scopes or unknown failures."""
+    if not isinstance(value, dict) or value.get("ok") is not False or value.get("identity") != "user":
+        return False
+    error = value.get("error")
+    return (isinstance(error, dict) and error.get("type") == "authorization"
+            and error.get("subtype") == "missing_scope"
+            and error.get("missing_scopes") == [REACTION_SCOPE])
+
+
+def successful_user_data(result):
+    if result.get("error") or result.get("returncode") != 0:
+        return None
+    envelope = parse_json_bytes(result.get("stdout", b""))
+    if not isinstance(envelope, dict) or envelope.get("ok") is not True or envelope.get("identity") != "user":
+        return None
+    return envelope.get("data")
+
+
+def history_chat_info(chat):
+    if not isinstance(chat, dict) or chat.get("chat_status") != "normal":
+        return None
+    mode = chat.get("chat_mode")
+    if mode != "group" and not (mode == "p2p" and chat.get("p2p_target_type") == "user"):
+        return None
+    chat_id = chat.get("chat_id")
+    if not isinstance(chat_id, str) or not re.fullmatch(r"oc_[A-Za-z0-9]+", chat_id):
+        return None
+    name = chat.get("name")
+    name = re.sub(r"[\x00-\x1f]", " ", name)[:240] if isinstance(name, str) else chat_id
+    link = chat.get("chat_app_link")
+    try:
+        parsed = urlsplit(link) if isinstance(link, str) and len(link) <= 2048 else None
+        trusted_link = (parsed and parsed.scheme == "https"
+                        and parsed.hostname in {"applink.feishu.cn", "applink.larksuite.com"}
+                        and parsed.username is None and parsed.password is None
+                        and parsed.path == "/client/chat/open"
+                        and parse_qs(parsed.query).get("openChatId") == [chat_id])
+    except ValueError:
+        trusted_link = False
+    return {"chat_id": chat_id, "chat_name": name, "chat_app_link": link if trusted_link else None}
+
+
+def collect_active_chat_history(snapshot, spec, profile, budget):
+    """Read bounded active histories with existing scopes, never reaction APIs."""
+    start = spec["args"][spec["args"].index("--start") + 1]
+    end = spec["args"][spec["args"].index("--end") + 1]
+    start_seconds, end_seconds = str(int(aware_datetime(start).timestamp())), str(int(aware_datetime(end).timestamp()))
+    snapshot["scope"] = (f"受限活跃会话历史；{start} 至 {end}；最多{FALLBACK_CHAT_LIMIT}个正常非机器人会话、"
+                         f"每会话首20条、总计最多{FALLBACK_MESSAGE_LIMIT}条；不是全量消息搜索")
+    meta = {"mode": "active_chat_history", "reason": "missing_reaction_scope",
+            "selected_chats": 0, "successful_chats": 0, "failed_chats": 0,
+            "truncated": False, "errors": []}
+    snapshot["fallback"] = meta
+    items, seen, examined = [], set(), 0
+
+    def call(args):
+        return budget.run(["--profile", profile, *args, "--as", "user", "--format", "json"])
+
+    listed = call(["im", "+chat-list", "--types", "p2p,group", "--sort", "active_time",
+                   "--exclude-muted", "--page-size", "20", "--page-all", "--page-limit", "1"])
+    chat_data = successful_user_data(listed)
+    if not isinstance(chat_data, dict) or not isinstance(chat_data.get("chats"), list) or type(chat_data.get("has_more")) is not bool:
+        meta["errors"].append({"stage": "chat_list", "error": listed.get("error", "invalid_or_failed_user_response")})
+        selected = []
+    else:
+        candidates, chat_ids = [], set()
+        for raw in chat_data["chats"]:
+            chat = history_chat_info(raw)
+            if chat and chat["chat_id"] not in chat_ids:
+                chat_ids.add(chat["chat_id"])
+                candidates.append(chat)
+        selected = candidates[:FALLBACK_CHAT_LIMIT]
+        meta["truncated"] = (len(candidates) > FALLBACK_CHAT_LIMIT or chat_data["has_more"]
+                             or bool(chat_data.get("page_token")))
+    meta["selected_chats"] = len(selected)
+    for chat in selected:
+        if examined >= FALLBACK_MESSAGE_LIMIT or budget.limit:
+            meta["truncated"] = True
+            break
+        page_size = min(20, FALLBACK_MESSAGE_LIMIT - examined)
+        params = {"container_id_type": "chat", "container_id": chat["chat_id"],
+                  "start_time": start_seconds, "end_time": end_seconds,
+                  "sort_type": "ByCreateTimeDesc", "page_size": page_size}
+        result = call(["api", "GET", HISTORY_PATH, "--params", json.dumps(params, separators=(",", ":"))])
+        data = successful_user_data(result)
+        valid = isinstance(data, dict) and type(data.get("has_more")) is bool and "items" in data
+        if valid:
+            records = data["items"]
+            if records is None and data["has_more"] is False:
+                records = []
+            valid = isinstance(records, list)
+        if not valid:
+            meta["failed_chats"] += 1
+            error = {"chat_id": chat["chat_id"], "error": result.get("error", "invalid_or_failed_user_response")}
+            classifiers = safe_error_metadata(parse_json_bytes(result.get("stderr", b"")))
+            if classifiers:
+                error["classification"] = classifiers
+            meta["errors"].append(error)
+            if budget.limit:
+                meta["truncated"] = True
+                break
+            continue
+        meta["successful_chats"] += 1
+        examined += min(len(records), page_size)
+        meta["truncated"] |= data["has_more"] or bool(data.get("page_token")) or len(records) > page_size
+        for record in records[:page_size]:
+            if not isinstance(record, dict):
+                meta["truncated"] = True
+                continue
+            mid, created = record.get("message_id"), record.get("create_time")
+            record_chat_id = record.get("chat_id")
+            if (not isinstance(mid, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,256}", mid)
+                    or not re.fullmatch(r"[0-9]{1,20}", str(created))
+                    or (record_chat_id is not None and record_chat_id != chat["chat_id"])):
+                meta["truncated"] = True
+                continue
+            if not int(start_seconds) * 1000 <= int(created) < int(end_seconds) * 1000:
+                continue
+            if mid not in seen:
+                seen.add(mid)
+                items.append({**record, **chat})
+    if meta["successful_chats"] + meta["failed_chats"] < len(selected):
+        meta["truncated"] = True
+    meta["bytes_consumed"] = budget.max_bytes - budget.remaining_bytes
+    meta["messages_examined"] = examined
+    if budget.limit:
+        meta["limit"] = budget.limit
+    if meta["successful_chats"]:
+        meta["original_error_metadata"] = snapshot.pop("error_metadata", {})
+        snapshot.pop("error", None)
+        snapshot.update(status="partial", count=len(items), has_more=None,
+                        data=redact({"ok": True, "identity": "user", "data": {"items": items},
+                                     "meta": {"collection_mode": "active_chat_history"}}),
+                        details=f"受限会话历史读取成功{meta['successful_chats']}个、失败{meta['failed_chats']}个，取得{len(items)}条；未读取反应，不是全量搜索")
+    else:
+        snapshot.update(status="unavailable", count=None, data=None,
+                        details="受限会话历史未取得任何可确认成功的历史响应；未扩权、未切换机器人身份")
+    return snapshot
+
+
 def collect_one(source_id, spec, profile, command, timeout_seconds, max_bytes):
     args = ["--profile", profile, *spec["args"], "--as", "user", "--format", "json"]
     snapshot = {"source": source_id, "scope": spec["scope"], "command_args": args, "data": None, "count": None}
     try:
-        result = run_bounded([*command, *args], timeout_seconds, max_bytes)
+        budget = ReadBudget(command, timeout_seconds, max_bytes)
+        result = budget.run(args)
         if result.get("error"):
             reason = "超过45秒采集时限" if result["error"] == "timeout" else "响应超过字节上限，未保存截断内容"
             snapshot.update(status="unavailable", error=result["error"], details=reason)
@@ -223,10 +414,13 @@ def collect_one(source_id, spec, profile, command, timeout_seconds, max_bytes):
                 labels = "; ".join(f"{name}={value}" for name, value in classifiers.items()) or "unknown"
                 snapshot.update(status="unavailable", error="cli_failed", error_metadata=classifiers,
                                 details=f"CLI exit={result['returncode']}；错误分类 {labels}；未认证或权限等错误请由用户处理，不自动登录")
+                failure = parse_json_bytes(result.get("stderr", b"")) if result["returncode"] != 0 else parsed
+                if source_id == "feishu_messages" and only_reaction_scope_missing(failure):
+                    snapshot = collect_active_chat_history(snapshot, spec, profile, budget)
             elif parsed is None:
                 snapshot.update(status="unavailable", error="invalid_json", details="CLI 未返回有效 UTF-8 JSON；未把未知输出当作空结果")
             else:
-                meta = response_metadata(parsed)
+                meta = response_metadata(parsed, source_id)
                 snapshot.update(status=meta["status"], count=meta["count"], details=meta["reason"], has_more=meta["has_more"], data=redact(parsed))
     except (OSError, ValueError, subprocess.SubprocessError):
         snapshot.update(status="unavailable", error="cli_unavailable", details="CLI 无法启动或读取失败；未读取认证信息，不切换机器人身份")

@@ -25,7 +25,7 @@ CLI 输出飞书官方页面地址，需本人在浏览器完成设置。不要�
 
 ## 3. 请求明确的只读用户权限
 
-先根据所需业务查当前 CLI 的 help/schema。以下是本项目初始读取范围的示例：
+先根据所需业务查当前 CLI 的 help/schema。以下是基础读取范围的示例；消息快捷搜索的表情回应权限与邮件明细权限可以按需追加，不是运行基础采集的必选项：
 
 ```sh
 lark-cli --profile codex-assistant auth login \
@@ -33,7 +33,13 @@ lark-cli --profile codex-assistant auth login \
   --no-wait --json
 ```
 
-这些 scopes 面向消息搜索/上下文、主日历、本人任务及邮箱读取，不包含发送邮件、创建日程或修改任务的权限。只需部分来源时可以进一步缩小范围；其他功能应在真正需要时增量授权。
+这些 scopes 面向基础消息读取、主日历、本人任务及收件箱列表，不包含发送邮件、创建日程或修改任务的权限。只需部分来源时可以进一步缩小范围；其他功能应在真正需要时增量授权。
+
+CLI `1.0.99` 的消息快捷搜索在前置权限检查中需要 `im:message.reactions:read`，即使传入 `--no-reactions` 也无法避开该检查。需要这个快捷搜索入口时可增量申请这一只读权限；它不是消息写权限。
+
+不追加该权限时，采集器仅在快捷搜索明确因缺少 `im:message.reactions:read` 失败时，改用已有 `im:message:readonly` 等权限允许的官方 CLI 基础 GET 消息历史接口 `/open-apis/im/v1/messages`。它通过官方会话列表选择最多 10 个近期活跃的非机器人会话，每会话最多 20 条、总计最多 100 条，仍受整个消息来源 45 秒和 2 MiB 限制，结果始终为 `partial`。这是受限会话读取，不是全局搜索或全历史同步；不绕过服务端权限检查、不发起授权、不切换 Bot、不下载程序。其他权限或认证错误保持不可用。
+
+`mail:user_mailbox.message:readonly` 可用于列出邮件 ID；读取候选邮件主题、收发地址和正文还分别需要 `mail:user_mailbox.message.subject:read`、`mail:user_mailbox.message.address:read`、`mail:user_mailbox.message.body:read`。这三个明细权限也全部只读，按需追加；不申请时保留收件箱 ID 列表，正文保持未读，不能据列表直接生成摘要。采集封装仍然只列 ID，正文由 Codex 在用户需要且已获授权时按当前 schema 精确读取。
 
 **不要用 `--recommend` 代替最小权限。** 集成时核验的 CLI 把它等同于全部业务域，并非“只读推荐集”。权限以所装版本的 help/schema 和实际授权页面为准。
 
@@ -73,21 +79,24 @@ lark-cli im +messages-search --help
 lark-cli calendar +agenda --help
 lark-cli task +get-my-tasks --help
 lark-cli schema mail.user_mailbox.messages.list
+lark-cli schema mail.user_mailbox.messages.get
 ```
 
 再用 `assistant.py collect-feishu` 检查一个有限窗口。所有业务命令使用所选 profile 和 `--as user`。输出包含每个来源状态、范围、数量和快照路径；来源独立失败，不会清空原有任务和日程。
 
 | 来源 | 采集内容与边界 |
 | --- | --- |
-| `feishu_messages` | 指定窗口的可访问消息搜索；搜索命中不是完整会话 |
+| `feishu_messages` | 指定窗口的可访问消息搜索；仅缺表情回应只读权限时使用受限会话历史读取，始终为 `partial`；两种结果都不是全历史 |
 | `feishu_calendar` | 指定窗口的本人主日历 agenda；不代表共享或其他工作日历 |
 | `feishu_tasks` | 本人未完成任务；不套用消息的时间过滤 |
-| `feishu_mail` | 本人邮箱消息列表；需要邮箱实际开通，正文须另读 |
+| `feishu_mail` | 本人收件箱 `INBOX` 的邮件 ID 列表；不含全邮箱，正文须另读且需相应明细只读权限 |
 
 未确认分页耗尽的成功结果保持 `partial`。达到页数/输出限制不能称为全量同步；核实重要前后文需要后续精确读取。
+
+空结果也按响应结构区分：成功的本人任务查询返回 `items:null` 且 `has_more:false` 时，可记录该有限查询为 `ok`、数量 0；日历返回 `data:[]` 可计数为 0，但未提供可核实的分页完整性时仍为 `partial`。认证失败或无权限不能转成这两种空结果。相应 JSON 结构已加入回归测试，真实账号仍需逐来源验证身份、范围与实际读取结果。
 
 ## 5. 日历写入另行处理
 
 项目默认只生成本地 ICS。只有用户明确要求把具体计划写到在线日历时，才按当前 schema 申请最小写权限，重新检查忙闲并预览具体标题、时间和日历。发布幂等的本人专注块与发会议邀请是不同操作；初始只读授权不允许代替用户向同事发消息。
 
-当前回归测试验证本地和模拟采集行为。真实飞书用户数据和在线日历写入依赖实际账户、企业审批与权限，未完成这些步骤时不能宣称端到端验证成功。
+回归测试验证本地规则和模拟采集响应。对任何实际账号，消息、日历、任务和邮件都应在所需企业审批与用户 OAuth 完成后逐项试读；某一入口成功不能证明其他入口或在线日历写入也已接通。只有核实实际范围、分页与返回内容后，才能报告对应来源的真实读取结果。
