@@ -1,0 +1,20 @@
+{
+  "timezone": "Asia/Shanghai",
+  "workdays": [1, 2, 3, 4, 5],
+  "work_windows": [["09:00", "12:00"], ["13:00", "18:00"]],
+  "capacity_ratio": 0.7,
+  "min_confidence": 0.8,
+  "source_freshness_hours": 24,
+  "required_sources": [
+    "feishu_messages", "feishu_calendar", "feishu_tasks", "feishu_mail",
+    "gmail", "google_calendar"
+  ],
+  "profile": {"name": null, "aliases": ["self"]},
+  "integrations": {
+    "feishu": {
+      "profile": "codex-assistant",
+      "authorization_status": "not_configured",
+      "grant_mode": "read_only"
+    }
+  }
+}
