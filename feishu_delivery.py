@@ -77,6 +77,11 @@ def _canonical(content, title):
     metadata = re.match(r"\A<title>([^\n]*)</title>\n*", content)
     if metadata and html.unescape(metadata[1]) == title:
         content = content[metadata.end():]
+    # The CLI may add the document title as a leading H1 when the reviewed
+    # body starts at H2. Remove only one exact title line, never body headings.
+    first_line, separator, remainder = content.partition("\n")
+    if first_line == "# " + title:
+        content = remainder if separator else ""
     # Whole-document JSON is data, not Markdown punctuation. Preserve quoted
     # whitespace, escapes, keys and values instead of de-escaping its strings.
     def distinct_object(pairs):

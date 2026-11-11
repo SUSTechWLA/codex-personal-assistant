@@ -406,6 +406,57 @@ class FeishuDeliveryTests(unittest.TestCase):
         self.assertEqual(self.publish()["documents"][0]["state"], "unchanged")
         self.assertEqual(len(self.cli.sent), 1)
 
+    def test_cli_auto_h1_title_accepts_h2_body_and_existing_h1_inputs(self):
+        body = "## Outcomes\nAn exact result.\n\n## Problems\nA known issue.\n\n## Tomorrow\nContinue the task.\n"
+        for heading in (None, "document_title", "Custom body heading"):
+            with self.subTest(heading=heading), tempfile.TemporaryDirectory() as directory:
+                bundle = copy.deepcopy(self.bundle)
+                document = bundle["documents"][0]
+                title = document["title"]
+                source_heading = title if heading == "document_title" else heading
+                document["content"] = ("# " + source_heading + "\n\n" if source_heading else "") + body
+                cli = TransformingCLI()
+                # Observed CLI behavior: add an H1 only if the source omitted
+                # it. Its XML title metadata can be present in either case.
+                cli.transform = lambda content: "<title>" + title + "</title>\n\n" + (
+                    "# " + title + "\n\n" if source_heading is None else "") + content
+                config = copy.deepcopy(self.config)
+                config["integrations"]["feishu"]["delivery"]["send_self_enabled"] = True
+                bundle["notification"] = {"key": "h1:verified", "text": "A verified summary is ready."}
+                first = delivery.publish(directory, bundle, config, apply=True, runner=cli, command=["synthetic-cli"])
+                self.assertTrue(first["all_delivered"])
+                second = delivery.publish(directory, bundle, config, apply=True, runner=cli, command=["synthetic-cli"])
+                self.assertEqual(second["documents"][0]["state"], "unchanged")
+                self.assertEqual(len(cli.sent), 1)
+
+    def test_cli_auto_h1_title_does_not_hide_wrong_titles_duplicates_or_body_loss(self):
+        title = self.bundle["documents"][0]["title"]
+        body = ("## Outcomes\nAn exact result.\n\n## Problems\nA known issue.\n\n"
+                "## Tomorrow\nContinue the task.\n\n```markdown\n# " + title + "\n```\n")
+        changes = {
+            "wrong_title": lambda content: "# A different title\n\n" + content,
+            "duplicate_title": lambda content: "# " + title + "\n\n# " + title + "\n\n" + content,
+            "truncated_body": lambda content: "# " + title + "\n\n" + content[:len(content) // 2],
+            "deleted_paragraph": lambda content: "# " + title + "\n\n" + content.replace("An exact result.\n", ""),
+            "empty_body": lambda content: "# " + title + "\n",
+            "changed_code_heading": lambda content: "# " + title + "\n\n" + content.replace(
+                "```markdown\n# " + title, "```markdown\n# A changed code literal"),
+        }
+        for label, change in changes.items():
+            with self.subTest(change=label), tempfile.TemporaryDirectory() as directory:
+                bundle = copy.deepcopy(self.bundle)
+                bundle["documents"][0]["content"] = body
+                bundle["notification"] = {"key": "h1:unverified", "text": "A reviewed summary is ready."}
+                config = copy.deepcopy(self.config)
+                config["integrations"]["feishu"]["delivery"]["send_self_enabled"] = True
+                cli = TransformingCLI()
+                cli.transform = lambda content: "<title>" + title + "</title>\n\n" + change(content)
+                result = delivery.publish(directory, bundle, config, apply=True, runner=cli, command=["synthetic-cli"])
+                self.assertFalse(result["all_delivered"])
+                self.assertEqual(result["documents"][0]["state"], "partial")
+                self.assertEqual(result["notification"]["state"], "blocked_documents")
+                self.assertFalse(cli.sent)
+
     def test_empty_truncated_wrong_and_one_character_changed_readbacks_never_deliver(self):
         original = ("# Full source\n\nCONTENT-MARKER\n\nA meaningful result and "
                     "https://example.test/result?id=42\n\nFinal evidence: exact.\n")
