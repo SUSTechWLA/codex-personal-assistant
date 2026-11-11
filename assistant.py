@@ -553,6 +553,9 @@ def main(argv=None):
     review_cmd = commands.add_parser("daily-review", help="生成有来源的全天工作日报和建议")
     review_cmd.add_argument("--date", type=date.fromisoformat)
     review_cmd.add_argument("--now", type=parse_dt)
+    publish_cmd = commands.add_parser("publish-feishu", help="预览或发布已审阅资料到本人飞书专属云空间；默认不触网")
+    publish_cmd.add_argument("file", type=Path)
+    publish_cmd.add_argument("--apply", action="store_true", help="执行已配置的本人文档写入和可选通知")
     collect_cmd = commands.add_parser("collect-feishu", help="使用已授权的官方 CLI 只读采集飞书，不登录或切换机器人身份")
     collect_cmd.add_argument("--start", required=True, type=parse_dt)
     collect_cmd.add_argument("--end", required=True, type=parse_dt)
@@ -576,6 +579,9 @@ def main(argv=None):
             data = status(root)
             now = args.now or datetime.now(timezone.utc)
             result = write_review(root, args.date or now.astimezone(get_tz(data["config"]["timezone"])).date(), now, data)
+        elif args.command == "publish-feishu":
+            from feishu_delivery import publish
+            result = publish(root, json.loads(args.file.read_text(encoding="utf-8-sig")), load_config(root), apply=args.apply)
         elif args.command == "collect-feishu":
             load_config(root)
             from collect_feishu import collect

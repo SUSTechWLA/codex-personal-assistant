@@ -14,7 +14,14 @@
     "feishu": {
       "profile": "codex-assistant",
       "authorization_status": "not_configured",
-      "grant_mode": "read_only"
+      "grant_mode": "read_only",
+      "delivery": {
+        "enabled": false,
+        "root_name": "个人工作台",
+        "folder_discovery": "list",
+        "send_self_enabled": false,
+        "message_sender": "user"
+      }
     }
   }
 }

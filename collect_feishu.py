@@ -90,11 +90,13 @@ def source_specs(start, end):
     }
 
 
-def run_bounded(command, timeout_seconds=TIMEOUT_SECONDS, max_bytes=MAX_BYTES):
+def run_bounded(command, timeout_seconds=TIMEOUT_SECONDS, max_bytes=MAX_BYTES, cwd=None):
     """Bound combined stdout/stderr in memory and kill on excess or timeout."""
     if not 0 < timeout_seconds <= TIMEOUT_SECONDS or not 0 < max_bytes <= MAX_BYTES:
         raise ValueError("采集限制超过许可范围")
     kwargs = {"stdin": subprocess.DEVNULL, "stdout": subprocess.PIPE, "stderr": subprocess.PIPE, "shell": False}
+    if cwd is not None:
+        kwargs["cwd"] = cwd
     if os.name == "nt":
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
     proc = subprocess.Popen(command, **kwargs)
@@ -207,6 +209,50 @@ def parse_json_bytes(value):
         return json.loads(value.decode("utf-8-sig"))
     except (UnicodeDecodeError, json.JSONDecodeError):
         return None
+
+
+def parse_cli_error_bytes(value):
+    """Read one CLI error after diagnostic lines, never a source-data stream."""
+    def distinct_object(pairs):
+        if len({key for key, _ in pairs}) != len(pairs):
+            raise ValueError("ambiguous CLI error object")
+        return dict(pairs)
+
+    try:
+        text = value.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return None
+    try:
+        return json.loads(text, object_pairs_hook=distinct_object)
+    except (ValueError, TypeError):
+        pass
+    start = text.find("{")
+    if start < 0:
+        return None
+    ansi = r"\x1b\[[0-?]*[ -/]*[@-~]"
+    prefix = re.sub(ansi, "", text[:start]).strip()
+    suffix = re.sub(r"(?:\s*" + ansi + r")+\s*$", "", text[start:])
+    # A second JSON value is not a diagnostic. In particular, do not choose
+    # one of several envelopes, or dig an error object out of a JSON wrapper.
+    for diagnostic in [prefix, *prefix.splitlines()]:
+        if not diagnostic.strip():
+            continue
+        try:
+            json.loads(diagnostic)
+        except (ValueError, TypeError):
+            continue
+        return None
+
+    try:
+        parsed = json.loads(suffix, object_pairs_hook=distinct_object)
+    except (ValueError, TypeError):
+        return None
+    if (not isinstance(parsed, dict) or parsed.get("ok") is not False
+            or parsed.get("identity") not in {"user", "bot"}
+            or not isinstance(parsed.get("error"), dict)
+            or not isinstance(parsed["error"].get("type"), str)):
+        return None
+    return parsed
 
 
 def safe_error_metadata(value):
@@ -346,7 +392,7 @@ def collect_active_chat_history(snapshot, spec, profile, budget):
         if not valid:
             meta["failed_chats"] += 1
             error = {"chat_id": chat["chat_id"], "error": result.get("error", "invalid_or_failed_user_response")}
-            classifiers = safe_error_metadata(parse_json_bytes(result.get("stderr", b"")))
+            classifiers = safe_error_metadata(parse_cli_error_bytes(result.get("stderr", b"")))
             if classifiers:
                 error["classification"] = classifiers
             meta["errors"].append(error)
@@ -410,11 +456,11 @@ def collect_one(source_id, spec, profile, command, timeout_seconds, max_bytes):
                 # authentication URL or credential debugging information.
                 classifiers = safe_error_metadata(parsed)
                 if result["returncode"] != 0:
-                    classifiers.update(safe_error_metadata(parse_json_bytes(result["stderr"])))
+                    classifiers.update(safe_error_metadata(parse_cli_error_bytes(result["stderr"])))
                 labels = "; ".join(f"{name}={value}" for name, value in classifiers.items()) or "unknown"
                 snapshot.update(status="unavailable", error="cli_failed", error_metadata=classifiers,
                                 details=f"CLI exit={result['returncode']}；错误分类 {labels}；未认证或权限等错误请由用户处理，不自动登录")
-                failure = parse_json_bytes(result.get("stderr", b"")) if result["returncode"] != 0 else parsed
+                failure = parse_cli_error_bytes(result.get("stderr", b"")) if result["returncode"] != 0 else parse_cli_error_bytes(result["stdout"])
                 if source_id == "feishu_messages" and only_reaction_scope_missing(failure):
                     snapshot = collect_active_chat_history(snapshot, spec, profile, budget)
             elif parsed is None:

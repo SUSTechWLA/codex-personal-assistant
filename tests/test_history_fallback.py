@@ -26,10 +26,12 @@ with open(__TRACE__,'a',encoding='utf-8') as trace: trace.write(json.dumps(args)
 assert args[:2]==['--profile','codex-assistant']
 assert args[-4:]==['--as','user','--format','json']
 if '+messages-search' in args:
+    if mode=='diagnostic_prefix': sys.stderr.write('Refreshing cached credentials...\n\x1b[33m')
     sys.stderr.write(json.dumps({'ok':False,'identity':'user','error':{
         'type':'authorization','subtype':'missing_scope',
         'missing_scopes':['im:message.reactions:read'],
         'hint':'SECRET_AUTH_HINT https://example.org/oauth/?code=SECRET'}}))
+    if mode=='diagnostic_prefix': sys.stderr.write('\x1b[0m\n')
     sys.exit(3)
 elif '+chat-list' in args:
     assert args[args.index('--types')+1]=='p2p,group'
@@ -136,6 +138,42 @@ class HistoryFallbackTests(unittest.TestCase):
         canonical = {"returncode": 3, "stdout": b"", "stderr": json.dumps(MISSING_REACTIONS).encode()}
         with mock.patch.object(collector, "run_bounded", return_value=canonical) as run:
             snapshot = collector.collect_one("feishu_calendar", collector.source_specs(START, END)["feishu_calendar"],
+                                             "codex-assistant", ["synthetic-cli"], 45, collector.MAX_BYTES)
+            self.assertEqual(1, run.call_count)
+            self.assertNotIn("fallback", snapshot)
+
+    def test_diagnostic_prefix_keeps_exact_fallback_and_never_persists_stderr(self):
+        snapshot = self.collect("diagnostic_prefix")
+        self.assertEqual("partial", snapshot["status"])
+        self.assertGreater(snapshot["fallback"]["successful_chats"], 0)
+        persisted = json.dumps(snapshot)
+        self.assertNotIn("Refreshing cached credentials", persisted)
+        self.assertNotIn("SECRET_AUTH_HINT", persisted)
+
+    def test_diagnostic_error_parser_rejects_ambiguous_or_non_error_json(self):
+        encoded = json.dumps(MISSING_REACTIONS).encode()
+        ambiguous = (
+            encoded + b"\n" + encoded,
+            b"[]\n" + encoded,
+            b"[\n1, 2\n]\n" + encoded,
+            b"{\"wrapper\":" + encoded + b"}",
+            b"Diagnostic\n" + json.dumps({"ok": True, "identity": "user", "data": {}}).encode(),
+            b"Diagnostic\n{\"ok\":false,\"identity\":\"bot\",\"identity\":\"user\",\"error\":{\"type\":\"authorization\"}}",
+            b'{"ok":false,"identity":"bot","identity":"user","error":{"type":"authorization","subtype":"missing_scope","missing_scopes":["im:message.reactions:read"]}}',
+        )
+        for value in ambiguous:
+            with self.subTest(value=value[:20]):
+                parsed = collector.parse_cli_error_bytes(value)
+                self.assertFalse(collector.only_reaction_scope_missing(parsed))
+        decorated = b"[auth] Refreshing cached credentials...\n\x1b[33m" + encoded + b"\x1b[0m\n"
+        self.assertTrue(collector.only_reaction_scope_missing(collector.parse_cli_error_bytes(decorated)))
+        self.assertIsNone(collector.parse_json_bytes(decorated))
+        # Error envelopes on stdout need the same ambiguity check, even when
+        # a wrapper incorrectly reports a successful process exit code.
+        duplicate_identity = ambiguous[-1]
+        with mock.patch.object(collector, "run_bounded", return_value={
+                "returncode": 0, "stdout": duplicate_identity, "stderr": b""}) as run:
+            snapshot = collector.collect_one("feishu_messages", collector.source_specs(START, END)["feishu_messages"],
                                              "codex-assistant", ["synthetic-cli"], 45, collector.MAX_BYTES)
             self.assertEqual(1, run.call_count)
             self.assertNotIn("fallback", snapshot)

@@ -18,6 +18,7 @@ This is an independent community project. Feishu access uses the official [lark-
 - Produces Chinese daily reports and local ICS drafts, with uncertainty, waiting items and deadline risks.
 - Keeps a separate work journal and end-of-day review: verified completions, ongoing work, blockers, up to three next-day priorities, and 1–2 evidence-triggered learning suggestions with a 15–30-minute exercise.
 - Supports a reusable Codex skill and saved schedules; a Dot can coordinate the workflow after the user connects a computer.
+- Optionally publishes reviewed results to a dedicated personal Feishu workspace, organized by day/project, with self-only briefs and verified links. Disabled by default; a specifically authorized and verified bot can be selected for notifications.
 
 Collection does not automatically become a task list. `collect-feishu` saves read-only raw snapshots and imports only source coverage. Codex must review the results and ingest extracted tasks and actual calendar events. Mail collection is limited to `INBOX` and does not include full email bodies; reading subjects, addresses and bodies requires the corresponding additional read scopes. Failed reads are reported as unavailable, not empty success.
 
@@ -89,11 +90,25 @@ These times are examples for a workday ending at 21:00; align the final review w
 
 Morning plans weigh real deadlines, priorities, known meetings and remaining capacity. The 14:00 check adjusts meaningful changes; the 18:00 review covers progress and remaining work, and the final review separates verified completions, ongoing work, blockers, next-day priorities, learning and risk notes, and coverage gaps.
 
-The host tools provide Codex activity; Python does not parse private app databases. Retain only relevant `userMessage`, `final_answer` and selected artifact references, ignoring reasoning, command text and tool metadata. An ended thread, file mtime or dirty working tree is not delivery evidence. Assistant self-checks and automated briefs are not the user's product-development accomplishments. Work records remain local.
+The host tools provide Codex activity; Python does not parse private app databases. Retain only relevant `userMessage`, `final_answer` and selected artifact references, ignoring reasoning, command text and tool metadata. An ended thread, file mtime or dirty working tree is not delivery evidence. Assistant self-checks and automated briefs are not the user's product-development accomplishments. Raw work records stay private; only reviewed assistant results may be published to the user's explicitly authorized personal Feishu workspace.
 
 Learning suggestions need a concrete trigger from that day's project, failed check, repeated problem or changed module, a reason, and a small verifiable 15–30-minute exercise. They do not automatically become tasks or OKRs. Without sufficient evidence, the report states the gap instead of inventing accomplishments or declaring that no work happened.
 
 A Dot can coordinate ongoing responsibilities once its user connects the computer. Connection, schedule and delivery must be verified separately; this is not a one-click Dot integration. See [Dot and proactive updates](docs/dot-setup.md).
+
+## Deliver results to personal Feishu
+
+Optional delivery stores reviewed plans, change checks, daily reviews, project overviews, goals/tasks, learning/risk notes and necessary source references in a dedicated personal cloud workspace. Messages contain only a self-only brief and verified links. It does not upload full chats, raw emails, source code, reasoning/command logs or credentials, and never publishes private records to GitHub.
+
+The workspace uses `00导航` at its root, `01每日工作/YYYY/MM`, `02项目管理/<project-id>`, `03目标与待办`, `04学习与知识`, `05周月复盘` and `90归档`. Stable keys update the same managed documents. Only the dedicated root and manifest-managed artifacts are touched; existing unrelated files, sharing settings and calendar events are not changed. Manual-edit conflicts and unknown results stop for verification instead of blind retries.
+
+Create the ignored `data/` directory and save reviewed input as `data/bundle.json`:
+
+```sh
+python3 assistant.py publish-feishu data/bundle.json
+```
+
+The default is an offline preview without body output or network access. Execution requires explicit `--apply`, enabled configuration and prior user authorization. Notifications default to user identity. A specifically chosen bot is allowed only after verifying its exact name and that it belongs to the same app/profile; the recipient remains the authenticated user. Reads and cloud documents always use user identity, with no read-failure fallback to a bot. Missing notification permissions can leave verified documents available with links in the original chat; API success does not guarantee a system alert. See [Feishu delivery](docs/feishu-delivery.md) for configuration, least-privilege scopes, a synthetic bundle and result states.
 
 ## Data and boundaries
 
@@ -104,13 +119,14 @@ Runtime data is private by default and ignored by Git:
 | `config.json` | Local preferences |
 | `assistant.sqlite3` | Ledger and history |
 | `data/journal.sqlite3` | Daily evidence-backed work records and suggestions |
+| `data/feishu-delivery/` | Private managed-document mapping, content state and publish lock |
 | `data/feishu/` | Source snapshots |
 | `reports/` | Daily Markdown reports |
 | `plans/` | Local ICS drafts |
 
 Inspect staged files before publishing. `.gitignore` does not remove files already tracked by Git.
 
-ICS generation does not write events into an online calendar. Online actions require explicit user authorization, appropriate write access, current availability checks and verified results. Initial read-only access does not provide calendar write permissions. The project does not automatically email coworkers, send Feishu messages or invite attendees.
+ICS generation does not write events into an online calendar. Calendar changes still need specific authorization, appropriate write access, current availability checks and verified results; personal document/brief delivery does not authorize meeting changes. Already authorized personal workspace results and self-only briefs do not need repeated permission requests, while official OAuth identity steps still belong to the user. The project does not automatically message coworkers, send email or meeting invitations, or publicly share work records.
 
 Create the Git-ignored `data/` directory first. Save reviewed task inputs to `data/reviewed-summary.json` and work-log inputs to `data/reviewed-work.json`; do not put real work imports in the repository root.
 
