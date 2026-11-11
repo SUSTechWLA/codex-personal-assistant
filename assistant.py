@@ -23,6 +23,12 @@ DEFAULT_CONFIG = {
     "source_freshness_hours": 24,
     "required_sources": ["codex_activity", "feishu_messages", "feishu_calendar", "feishu_tasks", "feishu_mail", "gmail", "google_calendar"],
     "profile": {"name": None, "aliases": ["self"]},
+    "output": {
+        "style": "concise", "daytime_max_items": 3, "daytime_max_chars": 160,
+        "daytime_save_document": False, "daily_save_time": "21:00", "daily_max_chars": 400,
+        "daily_max_achievements": 3, "daily_max_next_steps": 3, "cloud_daily_only": True,
+        "refresh_overviews": False, "weekly_max_chars": 600, "weekly_separate_document": False,
+    },
     "integrations": {
         "feishu": {
             "profile": "codex-assistant",
@@ -534,6 +540,15 @@ def write_plan(root, plan_date, now):
     return {"report": str(report), "calendar_draft": str(calendar), "scheduled_minutes": plan["scheduled_minutes"], "blocks": len(plan["blocks"]), "coverage_warnings": plan["source_warnings"]}
 
 
+def preview_plan(root, plan_date, now):
+    """Return the same scheduling decision without writing report/calendar files."""
+    plan = build_plan(status(root), plan_date, now)
+    return {**plan, "preview": True, "date": plan["date"].isoformat(), "now": plan["now"].isoformat(),
+            "blocks": [{**block, "start": block["start"].isoformat(), "end": block["end"].isoformat()} for block in plan["blocks"]],
+            "coverage": {"sources": plan["sources"], "warnings": plan["source_warnings"]},
+            "coverage_warnings": plan["source_warnings"]}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="本地个人助理账本与排程；可通过官方飞书 CLI 只读采集，不调用 AI API")
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parent)
@@ -548,6 +563,7 @@ def main(argv=None):
     plan_cmd = commands.add_parser("plan")
     plan_cmd.add_argument("--date", type=date.fromisoformat)
     plan_cmd.add_argument("--now", type=parse_dt)
+    plan_cmd.add_argument("--preview", action="store_true", help="仅输出排程 JSON，不创建计划报告或 ICS 文件")
     journal_cmd = commands.add_parser("log-work", help="导入由 Codex 核实的当日工作事实与建议，不修改任务状态")
     journal_cmd.add_argument("file", type=Path)
     review_cmd = commands.add_parser("daily-review", help="生成有来源的全天工作日报和建议")
@@ -590,7 +606,8 @@ def main(argv=None):
         else:
             config = load_config(root)
             now = args.now or datetime.now(timezone.utc)
-            result = write_plan(root, args.date or now.astimezone(get_tz(config["timezone"])).date(), now)
+            plan_date = args.date or now.astimezone(get_tz(config["timezone"])).date()
+            result = preview_plan(root, plan_date, now) if args.preview else write_plan(root, plan_date, now)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
     except (ValidationError, ValueError, KeyError, TypeError, OSError, sqlite3.Error) as exc:

@@ -2,6 +2,13 @@
 
 ## 2026-11-11
 
+### Concise routine output
+
+- Simplified human reports to achievements, material blockers and next-day actions, retaining complete evidence in private machine records.
+- Changed the routine workflow to numbered daytime reminders and one saved end-of-day summary per date; removed automatic daytime cloud overviews.
+- Added notification-only publishing without cloud file access and `plan --preview` without Markdown or ICS output.
+- Preserved historical documents and the existing safeguards for sender identity, deduplication and uncertain outcomes.
+
 ### Feishu workspace delivery
 
 - Added `publish-feishu` with an offline preview and an explicitly enabled apply mode for reviewed documents in a dedicated personal workspace.

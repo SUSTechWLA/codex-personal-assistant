@@ -10,6 +10,20 @@
     "gmail", "google_calendar", "codex_activity"
   ],
   "profile": {"name": null, "aliases": ["self"]},
+  "output": {
+    "style": "concise",
+    "daytime_max_items": 3,
+    "daytime_max_chars": 160,
+    "daytime_save_document": false,
+    "daily_save_time": "21:00",
+    "daily_max_chars": 400,
+    "daily_max_achievements": 3,
+    "daily_max_next_steps": 3,
+    "cloud_daily_only": true,
+    "refresh_overviews": false,
+    "weekly_max_chars": 600,
+    "weekly_separate_document": false
+  },
   "integrations": {
     "feishu": {
       "profile": "codex-assistant",

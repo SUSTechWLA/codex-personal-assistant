@@ -160,6 +160,123 @@ class FeishuDeliveryTests(unittest.TestCase):
         self.bundle["notification"] = {"key": "review:2026-11-11", "text": "A synthetic result is ready."}
         self.settings["send_self_enabled"] = True
 
+    def message_only(self):
+        self.bundle = {"schema_version": 1, "documents": [],
+                       "notification": {"key": "notify:2026-11-11:morning", "text": "1. Review the current task.\n2. Check the known blocker."}}
+        self.settings.clear()
+        self.settings.update(enabled=True, send_self_enabled=True, folder_discovery="managed_only")
+
+    def test_notification_only_preview_is_offline_without_cloud_configuration(self):
+        self.message_only()
+        with patch("feishu_delivery.find_cli", side_effect=AssertionError("no CLI discovery")):
+            result = delivery.publish(self.root, self.bundle, self.config)
+        self.assertEqual(result["mode"], "preview")
+        self.assertFalse(result["root_required"])
+        self.assertEqual(result["documents"], [])
+        self.assertIsNone(result["root_name"])
+        self.assertIsNone(result["folder_discovery"])
+        self.assertFalse((self.root / "data").exists())
+        self.settings["enabled"] = False
+        with patch("feishu_delivery.find_cli", side_effect=AssertionError("no CLI discovery")), self.assertRaises(ValueError):
+            delivery.publish(self.root, self.bundle, self.config, apply=True)
+
+    def test_notification_only_sends_plain_text_and_never_accesses_cloud_resources(self):
+        self.message_only()
+        result = self.publish()
+        self.assertTrue(result["all_delivered"])
+        self.assertEqual(result["documents"], [])
+        self.assertIsNone(result["root"])
+        self.assertEqual(self.cli.flag(self.cli.sent[0], "--text"), self.bundle["notification"]["text"])
+        self.assertEqual(self.cli.flag(self.cli.sent[0], "--user-id"), self.cli.owner)
+        self.assertEqual(len(self.cli.calls), 2)
+        self.assertTrue(all("whoami" in call or "+messages-send" in call for call in self.cli.calls))
+        account = self.account()
+        self.assertNotIn("root", account)
+        self.assertEqual(account["folders"], {})
+        self.assertEqual(account["documents"], {})
+        self.assertFalse((self.root / "data" / "feishu-delivery" / "content").exists())
+
+    def test_notification_only_ignores_unused_cloud_settings_and_preserves_document_receipts(self):
+        self.publish()
+        before = self.account()
+        self.bundle = {"schema_version": 1, "documents": [],
+                       "notification": {"key": "notify:2026-11-11:afternoon", "text": "1. Continue the known task."}}
+        # These cloud settings cannot affect a self reminder or trigger a root
+        # migration, a destination lookup, or a read of an existing document.
+        self.settings.update(root_token="obsolete / token", root_name="..", folder_discovery="unused-mode",
+                             send_self_enabled=True)
+        offset = len(self.cli.calls)
+        result = self.publish()
+        self.assertTrue(result["all_delivered"])
+        self.assertIsNone(result["root"])
+        self.assertTrue(all("whoami" in call or "+messages-send" in call for call in self.cli.calls[offset:]))
+        after = self.account()
+        self.assertEqual(before["root"], after["root"])
+        self.assertEqual(before["folders"], after["folders"])
+        self.assertEqual(before["documents"], after["documents"])
+        self.assertEqual(self.cli.flag(self.cli.sent[0], "--text"), self.bundle["notification"]["text"])
+
+    def test_notification_only_deduplication_and_known_or_unknown_failures_keep_their_rules(self):
+        self.message_only()
+        for outcome in ("success", "failed", "unknown"):
+            with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as directory:
+                cli = FakeCLI()
+                cli.message_failures = 1 if outcome == "failed" else 0
+                cli.message_timeout = outcome == "unknown"
+                first = delivery.publish(directory, self.bundle, self.config, apply=True, runner=cli, command=["synthetic-cli"])
+                second = delivery.publish(directory, self.bundle, self.config, apply=True, runner=cli, command=["synthetic-cli"])
+                expected_first = {"success": "sent", "failed": "failed", "unknown": "unknown"}[outcome]
+                expected_second = {"success": "unchanged", "failed": "sent", "unknown": "unknown"}[outcome]
+                self.assertEqual(first["notification"]["state"], expected_first)
+                self.assertEqual(second["notification"]["state"], expected_second)
+                self.assertEqual(second["all_delivered"], outcome != "unknown")
+                self.assertEqual(len(cli.sent), 1)
+                self.assertTrue(all("whoami" in call or "+messages-send" in call for call in cli.calls))
+
+    def test_notification_only_bot_is_verified_without_any_document_or_root(self):
+        self.message_only()
+        self.settings.update(message_sender="bot", expected_bot_name="Personal Helper")
+        result = self.publish()
+        self.assertTrue(result["all_delivered"])
+        self.assertEqual(self.cli.count("/open-apis/bot/v3/info"), 1)
+        self.assertEqual(self.cli.flag(self.cli.sent[0], "--as"), "bot")
+        self.assertEqual(self.cli.flag(self.cli.sent[0], "--user-id"), self.cli.owner)
+        self.assertTrue(all("whoami" in call or "/open-apis/bot/v3/info" in call or "+messages-send" in call
+                            for call in self.cli.calls))
+        self.bundle["notification"]["key"] = "notify:2026-11-11:stage"
+        self.settings["expected_bot_name"] = "Different Helper"
+        self.assertEqual(self.publish()["notification"]["state"], "failed")
+        self.assertEqual(len(self.cli.sent), 1)
+        self.assertNotIn("root", self.account())
+
+    def test_notification_only_preserves_identity_and_application_namespace_checks(self):
+        self.message_only()
+        first_owner = self.cli.owner
+        self.settings["expected_owner_id"] = first_owner
+        self.assertTrue(self.publish()["all_delivered"])
+        self.cli.owner = "ou_otherOwner"
+        self.assertEqual(self.publish()["state"], "failed")
+        self.assertEqual(len(self.cli.sent), 1)
+        self.settings.pop("expected_owner_id")
+        self.assertTrue(self.publish()["all_delivered"])
+        self.assertEqual(self.cli.flag(self.cli.sent[1], "--user-id"), "ou_otherOwner")
+        path = self.root / "data" / "feishu-delivery" / "manifest.json"
+        accounts = json.loads(path.read_text(encoding="utf-8"))["accounts"]
+        self.assertEqual(len(accounts), 2)
+        self.assertTrue(all("root" not in account for account in accounts.values()))
+        self.cli.app_id = "cli_differentApp"
+        with self.assertRaises(ValueError):
+            self.publish()
+        self.assertEqual(len(self.cli.sent), 2)
+
+    def test_empty_bundle_still_requires_documents_or_a_valid_notification(self):
+        for value in ({"schema_version": 1, "documents": []},
+                      {"schema_version": 1, "documents": [], "notification": None},
+                      {"schema_version": 1, "documents": [], "notification": {}}):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                delivery.publish(self.root, value, self.config, apply=True, runner=self.cli, command=["synthetic-cli"])
+        self.assertFalse(self.cli.calls)
+
     def test_preview_and_disabled_apply_do_not_discover_cli_or_touch_network(self):
         with patch("feishu_delivery.find_cli", side_effect=AssertionError("no CLI discovery")):
             result = delivery.publish(self.root, self.bundle, self.config)

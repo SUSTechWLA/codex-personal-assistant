@@ -5,6 +5,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import re
 import sqlite3
 import tempfile
 import unittest
@@ -118,13 +119,13 @@ class DailyReviewTests(unittest.TestCase):
     def test_no_facts_does_not_claim_no_work_or_create_a_database(self):
         value = self.review()
         rendered = daily_review.render_review(value)
-        self.assertIn("未采集到本日工作证据，不代表今天没有工作", rendered)
+        self.assertIn("尚无已核实的今日成果，不代表没有工作", rendered)
         self.assertTrue(any("codex_activity" in gap for gap in value["coverage_gaps"]))
         self.assertTrue(any("gmail" in gap for gap in value["coverage_gaps"]))
         self.assertFalse((self.root / "data" / "journal.sqlite3").exists())
 
     def test_all_rendered_source_text_is_escaped(self):
-        hostile = '<script>alert("x")</script> [run](https://invalid.example)\n# injected | cell'
+        hostile = '<b>x</b>\n# injected | cell'
         item = fact(title=hostile, outcome=hostile, evidence=hostile,
                     source_ref="codex://synthetic/<script>|ref")
         advice = recommendation(title=hostile, why=hostile, small_action=hostile,
@@ -133,10 +134,10 @@ class DailyReviewTests(unittest.TestCase):
         value["coverage"][0]["scope"] = hostile
         self.log(value)
         rendered = daily_review.render_review(self.review())
-        self.assertNotIn("<script>", rendered)
+        self.assertNotIn("<b>", rendered)
         self.assertNotIn("\n# injected", rendered)
         self.assertNotIn("[run](", rendered)
-        self.assertIn("&lt;script&gt;", rendered)
+        self.assertIn("&lt;b&gt;", rendered)
         self.assertIn(r"\| cell", rendered)
 
     def test_recommendations_replace_only_when_explicit_and_never_change_tasks(self):
@@ -159,13 +160,149 @@ class DailyReviewTests(unittest.TestCase):
         value = self.review()
         self.assertEqual([5, 4, 3], [item["priority"] for item in value["next_day"]])
         self.assertEqual(5, len(value["recommendations"]))
-        self.assertIn("建议需要本人决定", daily_review.render_review(value))
+        self.assertIn("明日计划（建议）", daily_review.render_review(value))
 
     def test_learning_is_limited_to_two_prioritized_suggestions(self):
         self.log(envelope(recommendations=[recommendation(id=f"learn:{i}", priority=i) for i in range(1, 6)]))
         value = self.review()
         self.assertEqual([5, 4], [item["priority"] for item in value["learning"]])
-        self.assertEqual(2, daily_review.render_review(value).count("**建议："))
+        rendered = daily_review.render_review(value)
+        self.assertNotIn("学习建议", rendered)
+        self.assertNotIn("练习路径边界检查", rendered)
+
+    def test_compact_report_limits_sections_without_padding_empty_problems(self):
+        achievements = [
+            "修复合成接口的超时重试边界，断网恢复后能够继续处理请求。",
+            "完善合成控制输入的异常处理，非法参数能够在执行前被明确拒绝。",
+            "补齐合成环境的回归基准配置，相同输入现在能获得稳定测试结果。",
+            "不应展示第四项成果。",
+        ]
+        issues = ["联调环境仍缺少合成设备接口权限，需确认访问范围后继续。",
+                  "测试数据的采样频率尚未统一，需确认基准设置后才能比较。", "不应展示第三项问题。"]
+        actions = ["先补充断网恢复用例并核对重试次数，完成后提交接口回归结果。",
+                   "与合成设备维护人确认接口权限范围，再安排一次输入输出联调。",
+                   "核对测试数据采样设置并固定合成基准，随后补齐结果比较记录。", "不应展示第四项计划。"]
+        entries = [fact(f"work:done:{i}", outcome=text) for i, text in enumerate(achievements)]
+        entries += [fact(f"work:blocked:{i}", status="blocked", outcome=text) for i, text in enumerate(issues)]
+        entries.append(fact("work:in-progress", status="in_progress", outcome="普通进行中无需重复堆入问题。"))
+        self.log(envelope(entries=entries, recommendations=[recommendation(f"plan:{i}", category="next_day", small_action=text)
+                                                            for i, text in enumerate(actions)],
+                          coverage=[*envelope()["coverage"], {"source": "google_calendar", "status": "partial",
+                                    "scope": "合成日历已读取限定窗口。", "source_ref": "calendar/synthetic"}]))
+        rendered = daily_review.render_review(self.review())
+        self.assertEqual(8, len(re.findall(r"^\d+\. ", rendered, re.MULTILINE)))
+        self.assertLessEqual(len(rendered), 430)
+        self.assertGreaterEqual(len(rendered), 250)
+        for text in achievements[:3] + issues[:2] + actions[:3]:
+            self.assertIn(text, rendered)
+        self.assertNotIn("不应展示", rendered)
+        self.assertNotIn("普通进行中", rendered)
+        self.assertNotIn("来源覆盖", rendered)
+        self.assertNotIn("注：", rendered)
+        # Use a separate empty day to check that absence never produces an issue section.
+        empty = daily_review.build_review(self.root, date(2026, 11, 9), self.now, assistant.status(self.root))
+        self.assertNotIn("问题/待办", daily_review.render_review(empty))
+
+    def test_compact_report_keeps_private_evidence_out_of_markdown_but_in_json(self):
+        secret = "PRIVATE_EVIDENCE_TRACE"
+        entry = fact(id="work:internal-id", title="合成边界修复", evidence=secret,
+                     source_ref="codex://thread/private-reference", task_id="task:private-id",
+                     outcome="完成合成边界修复。日志保存在 D:\\Private Files\\raw.txt，内部 ID work:internal-id。")
+        advice = recommendation(id="advice:internal-id", category="next_day", why="PRIVATE_LEARNING_CONTEXT",
+                                source_ref="https://invalid.example/private-source",
+                                small_action="补齐合成接口回归。参数位于 /home/private/raw.txt，联系 hidden@example.invalid。")
+        self.log(envelope(entries=[entry], recommendations=[advice]))
+        before = self.journal_snapshot()
+        result = daily_review.write_review(self.root, self.day, self.now, assistant.status(self.root))
+        rendered = Path(result["report"]).read_text(encoding="utf-8")
+        for token in (secret, "PRIVATE_LEARNING_CONTEXT", "private-reference", "private-source", "work:internal-id", "task:private-id",
+                      "advice:internal-id", "Private Files", "raw.txt", "/home/private", "hidden@example.invalid", "codex://", "http"):
+            self.assertNotIn(token, rendered)
+        self.assertIn("完成合成边界修复", rendered)
+        self.assertIn("补齐合成接口回归", rendered)
+        machine = json.loads(Path(result["review_json"]).read_text(encoding="utf-8"))
+        self.assertEqual(secret, machine["entries"][0]["evidence"])
+        self.assertEqual(entry["source_ref"], machine["entries"][0]["source_ref"])
+        self.assertEqual("PRIVATE_LEARNING_CONTEXT", machine["next_day"][0]["why"])
+        self.assertEqual(before, self.journal_snapshot())
+
+    def test_inline_paths_and_record_ids_are_removed_even_in_short_summaries(self):
+        self.log(envelope(entries=[fact(id="work:private", outcome="完成修复 work:private；D:/private/a.py", title="合成接口修复")],
+                          recommendations=[recommendation(category="next_day", small_action="检查 /tmp/private.log，再补齐回归。")]))
+        rendered = daily_review.render_review(self.review())
+        self.assertNotIn("work:private", rendered)
+        self.assertNotIn("D:/", rendered)
+        self.assertNotIn("/tmp/", rendered)
+        self.assertNotIn("private.log", rendered)
+
+    def test_short_ids_do_not_change_result_counts_or_words(self):
+        self.log(envelope(entries=[fact(id="1", outcome="完成12项合成检查，第1轮回归通过。")], recommendations=[]))
+        rendered = daily_review.render_review(self.review())
+        self.assertIn("完成12项合成检查，第1轮回归通过", rendered)
+
+    def test_routine_delivery_is_not_user_output_but_verified_tool_releases_remain(self):
+        delivery_coverage = {"source": "assistant_delivery", "status": "ok", "scope": "合成自投递记录。", "source_ref": "local/synthetic-delivery"}
+        entries = [fact("assistant:morning-delivery", source="assistant_delivery", completion_basis="artifact", outcome="已发送自动晨间简报。"),
+                   fact("assistant:tool-release", source="assistant_delivery", completion_basis="commit", outcome="发布合成助理代码版本，支持失败后恢复。"),
+                   fact("assistant:tool-tests", source="assistant_delivery", completion_basis="test", outcome="完成合成助理发布回归，断网场景通过。"),
+                   fact("assistant:message-wait", source="assistant_delivery", status="blocked", outcome="例行消息投递等待确认。", completion_basis="artifact")]
+        self.log(envelope(entries=entries, coverage=[*envelope()["coverage"], delivery_coverage], recommendations=[]))
+        result = daily_review.write_review(self.root, self.day, self.now, assistant.status(self.root))
+        rendered = Path(result["report"]).read_text(encoding="utf-8")
+        self.assertNotIn("自动晨间简报", rendered)
+        self.assertNotIn("例行消息", rendered)
+        self.assertNotIn("问题/待办", rendered)
+        self.assertIn("发布合成助理代码版本", rendered)
+        self.assertIn("完成合成助理发布回归", rendered)
+        self.assertEqual(3, result["completed"])  # The existing raw machine count retains its meaning.
+        self.assertEqual(2, result["brief_completed"])
+        self.assertEqual(4, len(json.loads(Path(result["review_json"]).read_text(encoding="utf-8"))["entries"]))
+
+    def test_overlong_wording_uses_supplied_short_title_or_whole_clause(self):
+        long = "过长的原始技术细节" * 80
+        self.log(envelope(entries=[fact("work:short-title", title="完成合成输入校验", outcome=long),
+                                  fact("work:clause", title=long, outcome="完成合成边界回归，" + long),
+                                  fact("work:no-summary", title=long, outcome=long)], recommendations=[]))
+        rendered = daily_review.render_review(self.review())
+        self.assertIn("完成合成输入校验", rendered)
+        self.assertIn("完成合成边界回归", rendered)
+        self.assertNotIn("过长的原始技术细节", rendered)
+        self.assertNotIn("...", rendered)
+        self.assertNotIn("…", rendered)
+        self.assertIn("具体结果待简述", rendered)
+
+    def test_only_decision_relevant_coverage_gaps_get_one_short_note(self):
+        self.log(envelope(recommendations=[]))
+        self.assertNotIn("注：", daily_review.render_review(self.review()))  # Known partial work read, and Gmail absent.
+        self.log(envelope(recommendations=[recommendation(category="next_day")]))
+        rendered = daily_review.render_review(self.review())
+        self.assertEqual(1, rendered.count("注："))
+        self.assertIn("尚未核对日历", rendered)
+        self.log(envelope(coverage=[{"source": "google_calendar", "status": "partial", "scope": "合成限定日历窗口。",
+                                    "source_ref": "calendar/synthetic"}], recommendations=[recommendation(category="next_day")]))
+        self.assertNotIn("注：", daily_review.render_review(self.review()))
+
+    def test_plan_preview_has_real_schedule_and_coverage_without_creating_documents(self):
+        self.config["required_sources"] = ["gmail", "codex_activity"]
+        (self.root / "config.json").write_text(json.dumps(self.config), encoding="utf-8")
+        assistant.ingest(self.root, {"sources": [{"id": "gmail", "status": "ok", "observed_at": "2026-11-10T08:00:00+08:00", "scope": "合成消息"}],
+            "tasks": [{"id": "task:preview", "title": "完成合成接口回归", "source": "gmail", "source_ref": "gmail/thread/synthetic",
+                       "evidence": "请测试用户检查合成接口。", "owner": "self", "status": "todo", "confidence": 0.95, "importance": 3, "estimate_minutes": 30}]})
+        before = assistant.status(self.root)
+        files_before = {str(path.relative_to(self.root)) for path in self.root.rglob("*")}
+        with redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(0, assistant.main(["--root", str(self.root), "plan", "--date", "2026-11-10", "--now", "2026-11-10T09:00:00+08:00", "--preview"]))
+        result = json.loads(out.getvalue())
+        self.assertTrue(result["preview"])
+        self.assertEqual("task:preview", result["blocks"][0]["task_id"])
+        self.assertEqual("2026-11-10T09:00:00+08:00", result["blocks"][0]["start"])
+        self.assertEqual(30, result["scheduled_minutes"])
+        self.assertTrue(result["coverage"]["warnings"])
+        self.assertEqual("gmail", result["coverage"]["sources"][0]["id"])
+        self.assertEqual(files_before, {str(path.relative_to(self.root)) for path in self.root.rglob("*")})
+        self.assertEqual(before, assistant.status(self.root))
+        self.assertFalse((self.root / "reports").exists())
+        self.assertFalse((self.root / "plans").exists())
 
     def test_failed_batch_rolls_back_after_a_sql_write(self):
         self.log()
@@ -205,7 +342,10 @@ class DailyReviewTests(unittest.TestCase):
         value = daily_review.build_review(self.root, self.day, self.now, ledger)
         self.assertEqual([], value["entries"])
         self.assertEqual(["mine"], [item["id"] for item in value["task_context"]])
-        self.assertIn("done 状态不等于本日交付", daily_review.render_review(value))
+        rendered = daily_review.render_review(value)
+        self.assertNotIn("尚无今日交付证据", rendered)
+        self.assertNotIn("他人任务", rendered)
+        self.assertIn("尚无已核实的今日成果", rendered)
 
     def test_report_outputs_do_not_replace_plan_or_ics(self):
         self.log()

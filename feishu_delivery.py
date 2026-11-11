@@ -1,8 +1,9 @@
-"""Publish reviewed assistant documents to an explicitly configured Feishu space.
+"""Publish reviewed Feishu documents or send a text-only self reminder.
 
 No collection, authentication, arbitrary recipients, sharing or calendar writes.
 Remote writes have durable intents: unknown outcomes are reconciled, never
-blindly retried. The default entry point is a network-free preview.
+blindly retried. Message-only bundles never access a cloud folder or document.
+The default entry point is a network-free preview.
 """
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -173,8 +174,8 @@ def validate_bundle(bundle):
     if bundle.get("schema_version") != 1 or isinstance(bundle.get("schema_version"), bool):
         raise ValueError("bundle schema_version must be 1")
     docs = bundle.get("documents")
-    if not isinstance(docs, list) or not 1 <= len(docs) <= MAX_DOCUMENTS:
-        raise ValueError("documents must contain between 1 and 30 reviewed documents")
+    if not isinstance(docs, list) or len(docs) > MAX_DOCUMENTS:
+        raise ValueError("documents must contain at most 30 reviewed documents")
     clean, keys, locations, total = [], set(), set(), 0
     for raw in docs:
         if not isinstance(raw, dict) or set(raw) != {"key", "title", "folder", "content"}:
@@ -202,10 +203,12 @@ def validate_bundle(bundle):
             raise ValueError("notification permits key and text only; recipients are never accepted")
         notification = {"key": _key(notification["key"], "notification key"),
                         "text": _text(notification["text"], "notification text", 5000, multiline=True)}
+    if not clean and notification is None:
+        raise ValueError("bundle requires at least one document or a reviewed notification")
     return {"schema_version": 1, "documents": clean, "notification": notification}
 
 
-def _settings(config):
+def _settings(config, *, need_root=True):
     integration = config.get("integrations", {}).get("feishu", {})
     delivery = integration.get("delivery", {})
     if not isinstance(delivery, dict):
@@ -213,13 +216,13 @@ def _settings(config):
     profile = _text(integration.get("profile", "codex-assistant"), "profile", 64)
     if not re.fullmatch(r"[A-Za-z0-9_-]+", profile):
         raise ValueError("invalid Feishu profile")
-    mode = delivery.get("folder_discovery", "list")
-    if mode not in {"list", "managed_only"}:
+    mode = delivery.get("folder_discovery", "list") if need_root else None
+    if need_root and mode not in {"list", "managed_only"}:
         raise ValueError("folder_discovery must be list or managed_only")
     for flag in ("enabled", "send_self_enabled"):
         if flag in delivery and type(delivery[flag]) is not bool:
             raise ValueError(f"delivery.{flag} must be boolean")
-    root_token = delivery.get("root_token")
+    root_token = delivery.get("root_token") if need_root else None
     if root_token is not None:
         root_token = _token(root_token)
     expected = delivery.get("expected_owner_id")
@@ -235,8 +238,8 @@ def _settings(config):
         raise ValueError("explicit bot delivery requires expected_bot_name")
     return {"profile": profile, "enabled": delivery.get("enabled", False),
             "send_self_enabled": delivery.get("send_self_enabled", False),
-            "root_name": _segment(delivery.get("root_name", "个人工作台")),
-            "root_token": root_token, "root_url": _url(delivery.get("root_url")),
+            "root_name": _segment(delivery.get("root_name", "个人工作台")) if need_root else None,
+            "root_token": root_token, "root_url": _url(delivery.get("root_url")) if need_root else None,
             "folder_discovery": mode, "expected_owner_id": expected,
             "message_sender": sender, "expected_bot_name": bot_name}
 
@@ -309,7 +312,7 @@ class Publisher:
             raise DeliveryFailure("unknown" if write else "failed", "response did not confirm the required user identity")
         return parsed if whoami else parsed.get("data")
 
-    def start(self):
+    def start(self, *, need_root=True):
         identity = self.call(["whoami"], whoami=True)
         owner = identity.get("onBehalfOf", {}).get("openId")
         if identity.get("available") is not True or not isinstance(owner, str) or not re.fullmatch(r"ou_[A-Za-z0-9]+", owner):
@@ -340,6 +343,13 @@ class Publisher:
             raise ValueError("profile application changed; existing resources require explicit migration")
         if any(not isinstance(self.account.get(name), dict) for name in ("folders", "documents", "notifications")):
             raise ValueError("invalid account manifest; refusing remote writes")
+        if not need_root:
+            # Short reminders need identity and durable delivery state only.
+            # Do not bind, discover, inspect or create any cloud destination.
+            # Existing document receipts remain untouched for evening reviews.
+            self.root_folder = None
+            self.save()
+            return
         configured = self.settings["root_token"]
         if configured and any(account is not self.account and isinstance(account, dict)
                               and account.get("root", {}).get("token") == configured
@@ -630,18 +640,20 @@ class Publisher:
 
 def publish(root, bundle, config, *, apply=False, runner=None, command=None):
     """Preview by default. Apply only explicitly reviewed content to this user."""
-    bundle, settings = validate_bundle(bundle), _settings(config)
+    bundle = validate_bundle(bundle)
+    need_root = bool(bundle["documents"])
+    settings = _settings(config, need_root=need_root)
     if not apply:
         documents = [{k: doc[k] for k in ("key", "title", "folder", "content_bytes", "content_hash")} for doc in bundle["documents"]]
         return {"mode": "preview", "all_delivered": False, "profile": settings["profile"],
-                "root_name": settings["root_name"], "root_configured": bool(settings["root_token"]),
+                "root_required": need_root, "root_name": settings["root_name"], "root_configured": bool(settings["root_token"]),
                 "folder_discovery": settings["folder_discovery"], "documents": documents,
                 "notification": {"requested": bundle["notification"] is not None, "enabled": settings["send_self_enabled"],
                                  "sender": settings["message_sender"]},
                 "note": "No network calls or remote changes; apply requires explicit configuration and --apply."}
     if not settings["enabled"]:
         raise ValueError("Feishu delivery is disabled; configure the destination before applying")
-    if settings["folder_discovery"] == "managed_only" and not settings["root_token"]:
+    if need_root and settings["folder_discovery"] == "managed_only" and not settings["root_token"]:
         raise ValueError("managed_only requires the token of an explicitly created dedicated root folder")
     root = Path(root).resolve()
     if not root.is_dir():
@@ -649,14 +661,14 @@ def publish(root, bundle, config, *, apply=False, runner=None, command=None):
     publisher = Publisher(root, settings, runner or run_bounded, command or find_cli())
     with _lock(publisher.directory):
         try:
-            publisher.start()
+            publisher.start(need_root=need_root)
         except DeliveryFailure as exc:
             return {"mode": "apply", "all_delivered": False, "state": exc.state, "detail": exc.detail,
-                    "documents": [], "notification": {"state": "blocked_documents"}}
+                    "documents": [], "notification": {"state": "blocked_documents"}, "root": None}
         documents = [publisher.publish_document(doc) for doc in bundle["documents"]]
         notification = publisher.notify(bundle["notification"], documents)
         delivered = all(doc["state"] in GOOD_DOCUMENT_STATES for doc in documents) and notification["state"] in {"sent", "unchanged", "not_requested"}
         return {"mode": "apply", "all_delivered": delivered, "documents": documents,
                 "notification": notification, "manifest": str(publisher.path),
                 "root": {"name": settings["root_name"], "token": publisher.root_folder,
-                         "url": publisher.account["root"].get("url")}}
+                         "url": publisher.account["root"].get("url")} if need_root else None}

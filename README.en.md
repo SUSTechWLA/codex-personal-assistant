@@ -4,23 +4,20 @@
 
 [中文](README.md)
 
-Combine relevant daily Codex work, Feishu, email and calendars into morning priorities, evidence-backed accomplishments and an end-of-day review with practical learning and risk suggestions. Codex handles reasoning; a Python standard-library CLI handles local records, validation and planning. No separate OpenAI API key or background server is required.
+Use relevant Codex work, Feishu, email and calendars for concise numbered daytime reminders and one nightly summary of results and tomorrow’s plan. Codex handles reasoning; Python retains private state and evidence. No separate OpenAI API key or background server is required.
 
 This is an independent community project. Feishu access uses the official [lark-cli](https://github.com/larksuite/cli); this project is not an official OpenAI or Feishu product.
 
 ## What it does
 
-- Collects Feishu search results or bounded chat history, the user's primary calendar, assigned incomplete tasks and message IDs from the user's `INBOX` through the official CLI, always as the user.
-- Uses connected Gmail / Google Calendar tools in Codex for those services; it does not implement a separate Google OAuth client.
-- Reads relevant daily Codex work through dynamically discovered host thread tools, bounded to 20 chats and the latest 3–5 turns per chat, then verifies selected results and artifacts.
-- Stores tasks, goals, events, source coverage and change history in a local SQLite database.
-- Deduplicates stable task IDs, protects completion feedback, and plans around known meetings, breaks, past time and configured workdays.
-- Produces Chinese daily reports and local ICS drafts, with uncertainty, waiting items and deadline risks.
-- Keeps a separate work journal and end-of-day review: verified completions, ongoing work, blockers, up to three next-day priorities, and 1–2 evidence-triggered learning suggestions with a 15–30-minute exercise.
-- Supports a reusable Codex skill and saved schedules; a Dot can coordinate the workflow after the user connects a computer.
-- Optionally publishes reviewed results to a dedicated personal Feishu workspace, organized by day/project, with self-only briefs and verified links. Disabled by default; a specifically authorized and verified bot can be selected for notifications.
+- Reads authorized Feishu/Codex activity, email and calendars through the official CLI and connected host tools.
+- Keeps stable task IDs, completion feedback, real deadlines and capacity checks in private records.
+- At 09:00/14:00/18:00, sends only 1–3 numbered self-only reminders, roughly 80–160 Chinese characters; no meaningful change means one next action, with no new document.
+- At 21:00, saves one `YYYY-MM-DD 工作总结`: up to three results, two concerns and three next-day actions, around 250–400 Chinese characters, shorter when evidence is limited.
+- Does not automatically add or update project, goal, learning, navigation or weekly files. Historical cloud files remain untouched.
+- Runs from a saved local schedule without Dot. Delivery is disabled until authorized and configured.
 
-Collection does not automatically become a task list. `collect-feishu` saves read-only raw snapshots and imports only source coverage. Codex must review the results and ingest extracted tasks and actual calendar events. Mail collection is limited to `INBOX` and does not include full email bodies; reading subjects, addresses and bodies requires the corresponding additional read scopes. Failed reads are reported as unavailable, not empty success.
+Collection is not an accomplishment. Codex reviews private raw results before extracting actions. Mail listing is limited to INBOX IDs; unauthorized bodies stay unread. Assistant delivery/self-checks are not product-development results, and failed reads are not empty success.
 
 ## Quick start
 
@@ -31,7 +28,7 @@ git clone https://github.com/SUSTechWLA/codex-personal-assistant.git
 cd codex-personal-assistant
 python3 assistant.py init
 python3 assistant.py status
-python3 assistant.py plan
+python3 assistant.py plan --preview
 ```
 
 On Windows, use a working Python command or the launcher, which can also locate an installed Codex Python runtime:
@@ -39,10 +36,12 @@ On Windows, use a working Python command or the launcher, which can also locate 
 ```powershell
 .\run-assistant.ps1 init
 .\run-assistant.ps1 status
-.\run-assistant.ps1 plan
+.\run-assistant.ps1 plan --preview
 ```
 
 `init` creates a configuration and an empty ledger. It does not add demo tasks, authenticate services or create schedules. Edit the generated `config.json` for your identity, time zone and working hours; see [config.example.json](config.example.json). Defaults are weekdays, 09:00–12:00 and 13:00–18:00, with 70% of available time allocated.
+
+The example’s `output` fields record preferences for the skill and schedule. Python does not dynamically enforce every time or length field; compact reviews use fixed item limits and short-sentence rules.
 
 Install the skill after reviewing its destination:
 
@@ -82,33 +81,29 @@ For Gmail and Google Calendar, connect their tools in Codex. The skill organizes
 
 ## Run automatically
 
-A skill does not run continuously by itself. Ask Codex / ChatGPT to save a schedule, for example:
+Save a local Codex schedule; Dot is optional. Installing the skill does not create a schedule. For example:
 
-> Every weekday at 09:00, 14:00, 18:00 and 21:00 in my time zone, run $personal-assistant for a morning plan, change check, progress review and end-of-day report. Use relevant daily Codex work and available sources. Deliver a concise final brief in this chat on each run, with evidence-backed results, next actions and relevant time blocks. Include up to two learning suggestions tied to actual work in the end-of-day report. Do not only save files or invent accomplishments. Confirm the saved time zone, schedule and destination.
+> On workdays at 09:00, 14:00 and 18:00, send 1–3 numbered reminders to my Feishu assistant conversation, roughly 80–160 Chinese characters; if nothing changed, give one next action. Save no daytime documents. At 21:00, save one “YYYY-MM-DD 工作总结” with up to three results, two concerns and three next-day actions, roughly 250–400 characters or shorter when appropriate. Omit methods, source paths, tables, evidence IDs, long learning lists and coverage tables; include only one decision-relevant caveat if needed. Do not update project/goal/learning/navigation files automatically. Keep a concise original-chat fallback and confirm the schedule, time zone and destination.
 
-These times are examples for a workday ending at 21:00; align the final review with your own workday. They are not schedules installed by this repository. Verify the saved task in Scheduled. Desktop alerts also depend on app and OS notification settings. Local steps require the computer online with the desktop app running.
+Adjust times to the actual workday and verify the task in Scheduled. Use `plan --preview` JSON for internal daytime planning; it creates no Markdown or ICS. The original `plan` remains available only for a separately requested calendar draft. Local work needs the computer online with the desktop app running; API success does not guarantee a system alert.
 
-Morning plans weigh real deadlines, priorities, known meetings and remaining capacity. The 14:00 check adjusts meaningful changes; the 18:00 review covers progress and remaining work, and the final review separates verified completions, ongoing work, blockers, next-day priorities, learning and risk notes, and coverage gaps.
+Weekly reviews are on request only, roughly 400–600 Chinese characters, with up to three results, risks and next-week actions. They create no extra schedule or weekly file; merge an evening review into that night’s single summary. Keep technical detail in applicable existing requirements/technical documents, without creating extra files to hide verbosity. Full evidence and machine JSON remain private.
 
-The host tools provide Codex activity; Python does not parse private app databases. Retain only relevant `userMessage`, `final_answer` and selected artifact references, ignoring reasoning, command text and tool metadata. An ended thread, file mtime or dirty working tree is not delivery evidence. Assistant self-checks and automated briefs are not the user's product-development accomplishments. Raw work records stay private; only reviewed assistant results may be published to the user's explicitly authorized personal Feishu workspace.
-
-Learning suggestions need a concrete trigger from that day's project, failed check, repeated problem or changed module, a reason, and a small verifiable 15–30-minute exercise. They do not automatically become tasks or OKRs. Without sufficient evidence, the report states the gap instead of inventing accomplishments or declaring that no work happened.
-
-A Dot can coordinate ongoing responsibilities once its user connects the computer. Connection, schedule and delivery must be verified separately; this is not a one-click Dot integration. See [Dot and proactive updates](docs/dot-setup.md).
+A Dot can coordinate this only after separate computer connection and destination verification. A saved local schedule does not prove Dot access.
 
 ## Deliver results to personal Feishu
 
-Optional delivery stores reviewed plans, change checks, daily reviews, project overviews, goals/tasks, learning/risk notes and necessary source references in a dedicated personal cloud workspace. Messages contain only a self-only brief and verified links. It does not upload full chats, raw emails, source code, reasoning/command logs or credentials, and never publishes private records to GitHub.
+Daytime bundles use `documents:[]` plus a valid notification, without accessing cloud files or a root; both empty is rejected. At night, publish only one summary under `brief:<date>:review` in `01 每日工作/YYYY/MM`, updating the same key. Stable notification keys are `notify:<date>:<slot>`. Do not delete, move or reorganize historical files, or update navigation each run.
 
-The workspace uses `00导航` at its root, `01每日工作/YYYY/MM`, `02项目管理/<project-id>`, `03目标与待办`, `04学习与知识`, `05周月复盘` and `90归档`. Stable keys update the same managed documents. Only the dedicated root and manifest-managed artifacts are touched; existing unrelated files, sharing settings and calendar events are not changed. Manual-edit conflicts and unknown results stop for verification instead of blind retries.
+For an existing review key, retain the manifest-bound title, folder and token; do not create another key to rename an older report. New dates default to “YYYY-MM-DD 工作总结”. The one-document limit applies only to routine assistant output, not separately requested requirements/technical documents. Preserve existing requirements documents.
 
-Create the ignored `data/` directory and save reviewed input as `data/bundle.json`:
+Create the ignored data directory and save reviewed input as `data/bundle.json`:
 
 ```sh
 python3 assistant.py publish-feishu data/bundle.json
 ```
 
-The default is an offline preview without body output or network access. Execution requires explicit `--apply`, enabled configuration and prior user authorization. Notifications default to user identity. A specifically chosen bot is allowed only after verifying its exact name and that it belongs to the same app/profile; the recipient remains the authenticated user. Reads and cloud documents always use user identity, with no read-failure fallback to a bot. Missing notification permissions can leave verified documents available with links in the original chat; API success does not guarantee a system alert. See [Feishu delivery](docs/feishu-delivery.md) for configuration, least-privilege scopes, a synthetic bundle and result states.
+This is a network-free preview with no body output. Add `--apply` only when the authorized destination and configuration are ready. Self-only bot delivery verifies the same app/profile and exact bot name; data reads and nightly documents retain user identity. Conflicts/unknown outcomes stop for verification. Confirm document and message results separately and do not promise OS alerts. See [concise Feishu delivery](docs/feishu-delivery.md) for configuration and both bundle forms.
 
 ## Data and boundaries
 
@@ -121,7 +116,7 @@ Runtime data is private by default and ignored by Git:
 | `data/journal.sqlite3` | Daily evidence-backed work records and suggestions |
 | `data/feishu-delivery/` | Private managed-document mapping, content state and publish lock |
 | `data/feishu/` | Source snapshots |
-| `reports/` | Daily Markdown reports |
+| `reports/` | One compact nightly summary and private full machine JSON; other drafts only when separately requested |
 | `plans/` | Local ICS drafts |
 
 Inspect staged files before publishing. `.gitignore` does not remove files already tracked by Git.
@@ -135,7 +130,7 @@ mkdir -p data
 python3 assistant.py ingest data/reviewed-summary.json
 python3 assistant.py log-work data/reviewed-work.json
 python3 assistant.py update 'source:stable-task-id' --status done
-python3 assistant.py plan --date 2026-11-11
+python3 assistant.py plan --preview --date 2026-11-11
 python3 assistant.py daily-review --date 2026-11-11
 python3 -m unittest discover -s tests -v
 ```

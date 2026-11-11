@@ -12,13 +12,17 @@ flowchart LR
     C --> J[审阅后的 JSON]
     J --> I[原子 ingest]
     I --> D[(SQLite 本地账本)]
-    D --> P[确定性 plan]
-    P --> O[Markdown 日报与 ICS 草案]
+    D --> P[plan --preview JSON / 内存排程]
+    P --> N[白天编号提醒 / 不写文档]
+    D --> M[用户另要的手动 plan]
+    M --> O[手动 Markdown / ICS 草案]
     C --> W[log-work 验证工作记录]
     W --> JDB[(私有工作日志)]
-    JDB --> E[daily-review 全天日报]
-    E --> H[聊天简报 / 已配置的 Dot 工作流]
-    O --> H[聊天简报 / 已配置的 Dot 工作流]
+    JDB --> E[daily-review 精简总结 / 私有完整JSON]
+    E --> K[21点唯一云工作总结]
+    K --> H[本人简报 / 原聊天兜底]
+    N --> H
+    O --> H
 ```
 
 ## 组件
@@ -27,12 +31,15 @@ flowchart LR
 | --- | --- |
 | `assistant.py` | 配置验证、SQLite、导入、状态更新、排程及输出 |
 | `collect_feishu.py` | 调用已有的官方原生 CLI，采集四类只读来源 |
-| `daily_review.py` | 独立工作日志、成果证据校验、全天日报与结构化结果，不修改任务完成状态 |
+| `daily_review.py` | 独立工作日志、成果核实、默认精简工作总结与私有完整JSON，不修改任务状态 |
+| `feishu_delivery.py` | 白天仅通知、不访问云root；夜间稳定key文档发布与消息去重 |
 | `run-assistant.ps1` | Windows Python 运行时选择，不修改 PATH |
 | `install_skill.py` | 将可复用技能安装到选定位置并绑定项目根目录 |
 | `skill/personal-assistant/` | Codex 的来源读取、事实提炼、主动简报与操作约定 |
 
 没有额外模型服务或常驻进程。定时由宿主应用执行；安装技能不会自动创建定时任务。
+
+`config.example.json`中的`output`是技能/定时任务遵循的偏好元数据，不是每字段都有Python动态执行器。当前精简formatter固定最多3条成果、2条问题、3条明日建议，优先约36字的完整短句；整体篇幅仍需Codex审阅提炼。
 
 ## 本地状态
 
@@ -50,7 +57,7 @@ SQLite 的 `sources`、`goals`、`tasks`、`events` 表按稳定 ID 保存 JSON 
 
 ## 独立工作日志与全天日报
 
-`log-work data/reviewed-work.json`把核实的活动写入私有`data/journal.sqlite3`；`daily-review --date YYYY-MM-DD`生成`reports/YYYY-MM-DD-review.md`和同名JSON。它们独立于任务账本，不会自动把待办设为完成，也不会自行调用模型编造建议。
+`log-work data/reviewed-work.json`把核实活动写入私有`data/journal.sqlite3`；21点`daily-review --date YYYY-MM-DD`生成精简工作总结MD和同名完整机器JSON。仅精简正文进入当日唯一云文档，JSON、证据和manifest继续私有追溯。这些记录独立于任务账本，不自动完成待办，也不调用模型编造结果。
 
 日志envelope：
 
@@ -64,7 +71,7 @@ SQLite 的 `sources`、`goals`、`tasks`、`events` 表按稳定 ID 保存 JSON 
 
 工作状态为`completed/in_progress/blocked/cancelled`。`completed`还必须提供`outcome`及`completion_basis:artifact/test/commit/user_confirmation`；这些类型标签只是校验字段，真实证据仍须由Codex核实。活动时间必须属于本批工作日期且不晚于`observed_at`；来源必须在本日已有或由本批coverage提供。同一成果ID不能跨日期复用，也不能为重复简报每天新建成果。
 
-建议类别为`next_day/learning/risk/focus`。显式提供建议数组时替换本日整组，空数组清除；未提供则保留。学习建议由当天具体项目、失败检查、反复问题或代码模块触发，写清依据、为什么与当前工作相关，以及15–30分钟可验证练习。建议不自动成为硬任务、截止或OKR。
+内部建议类别仍为`next_day/learning/risk/focus`；显式数组替换本日整组、空数组清除，未提供则保留。完整建议只存私有JSON，不自动变为日报长清单、硬任务或OKR。title/outcome一条一句、约40字，只放结论；技术细节在evidence或已有需求/技术文档，formatter不代替模型做语义总结，也不硬截半句。
 
 以下是**人工构造的工作日志示例**，不代表真实用户或真实测试结果，仅说明字段。先创建被Git忽略的`data/`目录，再保存为`data/reviewed-work.json`；真实工作导入文件不要放仓库根目录。
 
@@ -97,7 +104,7 @@ SQLite 的 `sources`、`goals`、`tasks`、`events` 表按稳定 ID 保存 JSON 
 }
 ```
 
-晨间计划依据明确截止、优先级、阻塞、会议与现实容量，最多列三项重点。全天日报按有证据的已完成、进行中、阻塞、明日最多三项、1–2条学习建议、风险/重点关注和覆盖缺口交付。无足够证据时应说明无法确认全天成果；不能把早晨计划直接算作晚上成果，也不能据此认定用户全天无工作。
+白天通过`plan --preview`的stdout JSON或内存推理安排现实容量，不创建reports/plans/MD/ICS；只有用户另要草案才运行普通plan。本人消息编号1–3条、约80–160汉字，无变化只1条下一步。21点唯一“YYYY-MM-DD 工作总结”约250–400字，成果≤3、问题≤2（无则省）、明日≤3，内容少可更短。正文不放方法、源码路径、表格、证据、ID、长学习单或覆盖表；重要缺口仅末尾一句。无证据不虚报，也不认定全天无工作。
 
 ## 导入 envelope
 
@@ -180,3 +187,9 @@ SQLite 的 `sources`、`goals`、`tasks`、`events` 表按稳定 ID 保存 JSON 
 成功 JSON 以原始资料快照落盘，已知凭据键和认证 URL 会脱敏；原始错误文本不保存，只保留有限、经过校验的错误分类。**脱敏不等于公开可分享**：正常消息正文、姓名和公司信息仍可能是私人数据，因此整个 `data/` 都应保持私有。
 
 仅来源覆盖会自动导入。原始消息不会直接成为任务，邮箱列表不会直接产生邮件摘要，日历不明结构不会被当作完整快照。Gmail / Google Calendar 的读取由 Codex 插件承担，遵循相同的来源和提炼规则。
+
+## 例行云交付的写入边界
+
+白天bundle为documents:[]加合法notification，通知key为notify:<date>:<slot>，不访问云文件或root；两者空不允许。21点只发布brief:<date>:review，目录沿用01 每日工作/YYYY/MM，同key更新。已有key保持manifest的实际title/folder/token，不为旧标题换key重建；新日期默认“YYYY-MM-DD 工作总结”。不自动更新项目/目标/学习/知识/导航，不删移历史文件。
+
+周报仅用户要求时约400–600字，成果/风险/下周各≤3，不增定时或周报文件；当晚生成则合并同一份总结。每天一份只限制例行助理输出，另行明确的需求/技术文档任务正常处理，既有需求文档不受影响。

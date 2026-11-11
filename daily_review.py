@@ -297,59 +297,97 @@ def _md(value):
     return re.sub(r"([\\`*_{}\[\]()#+.!|>~-])", r"\\\1", value)
 
 
-def _entry_lines(entry):
-    lines = [f"- **{_md(entry['title'])}**"]
-    if entry.get("outcome"):
-        lines.append(f"  - 结果：{_md(entry['outcome'])}")
-    lines.append(f"  - 证据：{_md(entry['evidence'])}")
-    basis = f"；完成依据：{_md(entry['completion_basis'])}" if entry.get("completion_basis") else ""
-    lines.append(f"  - 来源：{_md(entry['source'])} · {_md(entry['source_ref'])}；发生：{_md(entry['occurred_at'])}{basis}")
-    return lines
+def _routine(entry):
+    # Historical delivery observations share this source with genuine, requested
+    # tooling releases. Keep verified code/test work without guessing from titles.
+    return entry["source"] == "assistant_delivery" and entry.get("completion_basis") not in {"commit", "test"}
 
 
-def _advice_lines(items, empty):
-    if not items:
-        return [empty]
-    lines = []
+def _brief_text(value, item):
+    """Remove detail-only references before selecting a verbatim short sentence."""
+    text = str(value)
+    for key in ("id", "task_id", "source_ref"):
+        if item.get(key):
+            text = re.sub(r"(?<!\w)" + re.escape(item[key]) + r"(?!\w)", " ", text)
+    text = re.sub(r"```.*?```", " ", text, flags=re.DOTALL)
+    text = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", text)
+    text = re.sub(r"\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s，。；！？、<>]+", " ", text)
+    # Quoted paths may contain spaces. Unquoted Windows paths are removed up to
+    # a sentence/clause boundary rather than leaking a trailing private filename.
+    text = re.sub(r'''(["'`])(?:[A-Za-z]:[\\/]|\\\\|/)[^\r\n]*?\1''', " ", text)
+    text = re.sub(r'''(?<!\w)(?:[A-Za-z]:[\\/]|\\\\)[^\r\n，。；！？、<>"'`]+''', " ", text)
+    text = re.sub(r'''(?<![\w/])/[\w.~+-]+(?:/[^\s，。；！？、<>"'`]*)?''', " ", text)
+    text = re.sub(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b", " ", text)
+    text = re.sub(r"\s+", " ", text).strip(" `，,；;：:—-")
+    text = re.sub(r"\s+([，。；！？,.!?;:])", r"\1", text)
+    return text
+
+
+def _brief_sentence(item, fields, fallback, limit=36):
+    """Prefer supplied concise wording; never generate a semantic summary.
+
+    An overlong field can fall back to another supplied field or a whole clause.
+    If neither fits, use a neutral disclosure instead of cutting a claim in half.
+    """
+    candidates = [_brief_text(item[field], item) for field in fields if item.get(field)]
+    for text in candidates:
+        sentence = re.split(r"(?<=[。！？!?])\s*|(?<=[.])\s+", text, maxsplit=1)[0].strip()
+        if 4 <= len(sentence) <= limit:
+            return sentence.rstrip("。.!！?？") + "。"
+    for text in candidates:
+        clause = re.split(r"[，,；;]", text, maxsplit=1)[0].strip()
+        if 4 <= len(clause) <= limit:
+            return clause.rstrip("。.!！?？") + "。"
+    return fallback
+
+
+def _brief_items(items, fields, fallback, maximum):
+    result = []
     for item in items:
-        lines.extend([f"- **建议：{_md(item['title'])}**", f"  - 依据：{_md(item['why'])}",
-                      f"  - 最小行动：{_md(item['small_action'])}", f"  - 来源：{_md(item['source_ref'])}"])
-    return lines
+        sentence = _brief_sentence(item, fields, fallback)
+        if sentence not in result:
+            result.append(sentence)
+        if len(result) == maximum:
+            break
+    return result
+
+
+def _brief_completed(review):
+    return _brief_items((item for item in review["entries"] if item["status"] == "completed" and not _routine(item)),
+                        ("outcome", "title"), "已有可核实的完成记录，具体结果待简述。", 3)
+
+
+def _coverage_note(review):
+    # Normal bounded/partial reads are already known limitations. Only a missing
+    # work source, or an unread calendar relevant to tomorrow, merits one line.
+    sources = {item["source"]: item["status"] for item in review["coverage"]}
+    missing_work = sources.get("codex_activity") in {None, "unavailable"}
+    missing_calendar = bool(review["next_day"]) and not any(
+        sources.get(source) in {"ok", "partial"} for source in ("feishu_calendar", "google_calendar"))
+    if missing_work and missing_calendar:
+        return "注：工作活动与日历尚未读取，成果及安排待核实。"
+    if missing_work:
+        return "注：工作活动尚未读取，成果记录可能遗漏。"
+    if missing_calendar:
+        return "注：尚未核对日历，明日安排待确认。"
+    return None
 
 
 def render_review(review):
-    lines = [f"# {review['date']} 工作日报", "", f"生成时间：{_md(review['generated_at'])}（{_md(review['timezone'])}）", "",
-             "以下完成事项仅来自本日有证据的工作记录；建议需要本人决定后再纳入计划。", "", "## 完成交付", ""]
-    completed = [item for item in review["entries"] if item["status"] == "completed"]
-    if not completed:
-        lines.append("未采集到本日已完成交付的证据，不代表今天没有工作。")
-    for item in completed:
-        lines.extend(_entry_lines(item))
-    lines.extend(["", "## 进行中与阻塞", ""])
-    pending = [item for item in review["entries"] if item["status"] != "completed"]
-    if not pending:
-        lines.append("本日尚无已核实的进行中、阻塞或取消记录。")
-    labels = {"in_progress": "进行中", "blocked": "阻塞", "cancelled": "取消"}
-    for item in pending:
-        lines.extend([f"### {labels[item['status']]}", "", *_entry_lines(item)])
-    lines.extend(["", "## 计划对照", "", "下表是当前任务账本快照，不代表晨间原计划；done 状态不等于本日交付。", ""])
-    if not review["task_context"]:
-        lines.append("当前没有可对照的本人任务记录。")
-    else:
-        lines.extend(["| 任务 | 当前状态 | 已知截止 | 来源 |", "| --- | --- | --- | --- |"])
-        for item in review["task_context"]:
-            lines.append(f"| {_md(item['title'])} | {_md(item['status'])} | {_md(item['due_at'] or '未提供')} | {_md(item['source_ref'] or '未提供')} |")
-    lines.extend(["", "## 明日建议（最多三项）", "", *_advice_lines(review["next_day"], "暂无有来源支持的明日建议；先补齐当日证据与待办。"),
-                  "", "## 学习建议（最多两项）", "", *_advice_lines(review["learning"], "暂无有工作依据的学习建议，不额外编造学习任务。"),
-                  "", "## 风险及关注重点", "", *_advice_lines([item for item in review["recommendations"] if item["category"] in {"risk", "focus"}], "暂无有来源支持的新增风险或关注建议。"),
-                  "", "## 覆盖缺口", ""])
-    lines.extend([f"- {_md(item)}" for item in review["coverage_gaps"]] or ["已读取下面记录的范围；范围之外的工作仍可能遗漏。"])
-    if review["coverage"]:
-        lines.extend(["", "| 来源 | 本日读取状态 | 读取范围 | 记录来源 |", "| --- | --- | --- | --- |"])
-        for item in review["coverage"]:
-            lines.append(f"| {_md(item['source'])} | {_md(item['status'])} | {_md(item['scope'])} | {_md(item['source_ref'])} |")
-    lines.extend(["", *[_md(item) for item in review["limits"]], ""])
-    return "\n".join(lines)
+    """A compact human brief; complete evidence remains in the private JSON."""
+    lines = [f"# {review['date']} 工作总结", "", "**今日成果**"]
+    completed = _brief_completed(review)
+    lines.extend([f"{i}. {_md(text)}" for i, text in enumerate(completed, 1)] or ["尚无已核实的今日成果，不代表没有工作。"])
+    blocked = _brief_items((item for item in review["entries"] if item["status"] == "blocked" and not _routine(item)),
+                           ("outcome", "title"), "有工作受阻，具体问题待简述。", 2)
+    if blocked:
+        lines.extend(["", "**问题/待办**", *[f"{i}. {_md(text)}" for i, text in enumerate(blocked, 1)]])
+    tomorrow = _brief_items(review["next_day"], ("small_action", "title"), "明日建议的具体动作待简述。", 3)
+    lines.extend(["", "**明日计划（建议）**", *([f"{i}. {_md(text)}" for i, text in enumerate(tomorrow, 1)] or ["暂未确认明日计划。"])])
+    note = _coverage_note(review)
+    if note:
+        lines.extend(["", note])
+    return "\n".join([*lines, ""])
 
 
 def write_review(root, review_date, now, ledger):
@@ -375,4 +413,5 @@ def write_review(root, review_date, now, ledger):
             temporary.unlink(missing_ok=True)
     return {**{key: str(value) for key, value in paths.items()}, "date": review["date"],
             "entries": len(review["entries"]), "completed": sum(item["status"] == "completed" for item in review["entries"]),
+            "brief_completed": len(_brief_completed(review)),
             "next_day_suggestions": len(review["next_day"]), "coverage_gaps": review["coverage_gaps"]}
