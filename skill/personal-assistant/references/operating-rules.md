@@ -52,7 +52,7 @@
 
 保留真实会议，优先保护当天可达成的明确截止，再综合目标贡献、阻塞与重要性。`waiting`、责任不明和低置信任务不占专注块。大工作分成下一步；超量留在未排清单，不挤占缓冲。报告剩余容量、已排分钟、无法容纳事项和真实延期风险。
 
-超过当天工作时间后不修改截止或自动完成，提出下一工作日方案。阶段复盘后若仍在工作窗口，可继续安排剩余工作。周末是否工作以配置和明确用户指令为准。
+超过当天工作时间后不修改截止或自动完成，提出下一工作日方案。09:30/13:30可调整日间下一步，晚间由用户自行规划，不主动安排19:00–21:00工作。周末是否工作以配置和明确用户指令为准。
 
 日历未接通、只读了一个日历或部分查询时，把安排标成“待核对日历的草案”。Google 空不代表飞书空。ICS 是本地建议，不执行导入，不代表在线同步。
 
@@ -68,25 +68,25 @@
 
 本人Bot简报和唯一日终写入在用户授权范围内无需每轮再批准，OAuth身份步骤仍由本人完成。读取delivery配置；实际执行需enabled=true，消息还需send_self_enabled=true。发布输入统一在被忽略的data/bundle.json，先离线preview再--apply，不为发送结果绕过权限或身份检查。
 
-09/14/18的bundle固定为`{schema_version:1,documents:[],notification:{key,text}}`，通知key为`notify:<date>:morning|changes|stage`。合法通知不可省略；documents和notification都空时拒绝。只消息模式不要求云root、不调用云文件/目录接口，不创建或更新MD/ICS或云项目文件。需要排程时使用`plan --preview --date YYYY-MM-DD`的JSON，普通plan只用于用户另要的手动日历草案。
+09:30/13:30普通提醒bundle固定为`{schema_version:1,documents:[],notification:{key,text}}`，key为`notify:<date>:morning|changes`；合法通知不可省略，两者为空拒绝，不访问云root。待补周报通知是唯一例外：在这两个窗口复用原pinned文档+原固定notification_text完整包，发布器回读核验后附URL；不自行拼接URL或重新生成。内部排程只用`plan --preview`，不自动安排19:00–21:00晚间工作；普通plan只用于另行请求的草案。
 
-21点只把精简正文发布为一份`YYYY-MM-DD 工作总结`，key固定`brief:<date>:review`，目录沿用`01 每日工作/YYYY/MM`；同日同key更新，不以slot另建文件。通知key为`notify:<date>:review`，只给本人简报和读回核实的当日总结链接。不随日报新建/更新项目、目标、学习、知识、导航或周报文件；旧文件默认保留，不擅删/移或批量整理，catalog/manifest只用于内部定位。
+21点只静默归档一份`YYYY-MM-DD 工作总结`，key固定`brief:<date>:review`，目录沿用`01 每日工作/YYYY/MM`，`notification:null`；同key更新并回读全文，成功后`DONT_NOTIFY`，不发飞书或当前聊天复盘。只保留真实成果、实质问题和已确认明日事项，不安排晚间工作或创造新承诺。周报可先归档到目标周五同一文档，但没有本人通知不能complete；保留待通知，下个09:30/13:30再用pinned完整包发送与确认。旧文件保留，不另建项目/目标/学习/导航或周报文件。
 
 文档与通知分别验证。夜间写入后回读全文，规范已证实Markdown往返差异后比较；同hash复跑也重新核验。手工修改冲突或pending/unknown时停止核实，不盲重试。明确未发送的授权/校验失败修复后可用原幂等key恢复并保留attempt收据。manifest位于data/feishu-delivery/manifest.json及同目录publish.lock，绑定本人、profile和appId；不能因丢失映射重建一套。
 
-读取和云文档仍--as user；消息仅给用户whoami本人openid。显式指定Bot时核验同profile同app及expected_bot_name，不接受群ID/任意recipient，不在读取失败后切Bot。API发送成功不保证系统弹窗；当前聊天保留同样简洁的兜底，失败只说影响决策的状态，不贴日志、scope清单或ID。
+读取和云文档仍--as user；消息仅给用户whoami本人openid。显式指定Bot时核验同profile同app及expected_bot_name，不接受群ID/任意recipient，不在读取失败后切Bot。API发送成功不保证系统弹窗；仅09:30/13:30当前聊天保留简洁兜底，21点不发消息，失败只说影响决策的状态，不贴日志、scope清单或ID。
 
 只上传审阅后的日终总结，不全量上传邮件、源码、聊天、推理/命令记录或凭据。技术细节在适用且已有授权的需求/技术文档维护，不为隐藏冗余另建文件或擅改无关文档。给同事发消息、公开分享或改会议仍需另有指令。通用接口细节见项目docs/feishu-delivery.md。
 
 ## 主动简报与建议
 
-白天编号1–3条、总约80–160汉字，一条一结论；无变化只1条下一步，不凑字数。09点选当下最重要动作，14点只改实质变化，18点只给剩余工作下一步。不要把内部证据、方法、路径、ID、覆盖表或完整时间表照搬到消息。
+只在09:30/13:30给编号1–3条、总约80–160汉字的主动提醒，一条一结论；无变化只1条下一步。09:30抓当前重点，13:30只改实质变化。取消18点阶段复盘，不主动规划或提醒晚间工作。证据、方法、路径、ID与覆盖表留私有。21点静默归档，不发复盘兜底。
 
-普通日21点唯一工作总结总约250–400字，三类内容：今日成果≤3、问题/需关注≤2（无则省）、明日计划≤3。只写结论，不放表格、方法细节、源码路径、证据、ID、冗长学习建议或来源覆盖表。信息少可更短；没有完成证据不虚报，重要且影响决策的缺口最多末尾一句。学习仅在确实影响当下决策时浓缩成一条问题提醒，不要求每晚给建议。
+普通日21点静默归档的唯一工作总结总约250–400字，三类内容：今日成果≤3、问题/需关注≤2（无则省）、已确认明日事项≤3。只写结论，不放表格、方法细节、源码路径、证据、ID、冗长学习建议或来源覆盖表。信息少可更短；没有完成证据不虚报，重要且影响决策的缺口最多末尾一句。学习仅在确实影响当下决策时浓缩成一条问题提醒，不要求每晚给建议。
 
 周报由`output.weekly_enabled=true`启用，`weekly_day`为ISO星期、默认5，`weekly_due_time`默认`18:00`，`weekly_start_date`可限制启用周范围；默认安装不启用。周五傍晚起有机会就生成，未成功则周末或恢复在线后的下一次运行补跑，不要求21点在线。复用宿主现有任务，Python不自行调度；周末无待补周报时不发普通提醒。先用`weekly-status`只读检查，再用`daily-review --weekly-due`认领到期周报并离线生成。严格使用返回的目标周配置周报日（默认周五）`report_date`和路径，跨日/跨周仍复用其review及通知key，同周仅一份。简短保留目标周配置周报日（默认周五）成果，周部分约400–600字：本周成果≤3、风险/未完成≤2、下周重点（建议）≤3；信息少不凑数，按目标周配置工作日聚合journal核实事实，不混入新一周，提前生成注明采集截止。缺覆盖如实，不复制流水或实现日志，不把方案当实现、仿真当真机验收。始终用`brief:<report_date>:review`、`notify:<report_date>:review`；文档全文、hash、URL与本人通知message ID核实后，用`weekly-complete --week-start YYYY-MM-DD --receipt <真实私有收据.json>`确认。普通日报、预览或离线生成不算交付，未知结果先核实不盲重发，后续同日总结保留周内容。`--now`只用于指定检查时间，日常省略。完整证据和manifest私有保留，不另建weekly key、文件或导航；助手投递与自检不算研发成果。
 
-先检查`weekly-status`再采集。若`state=delivered_unacknowledged`或`needs_completion=true`，将返回的`receipt`原样保存为私有JSON，直接`weekly-complete`，不能重新发布或发消息；若`state=delivery_check_required`，停止周报写入/发送，先核实未知结果。仅`due=true`才`daily-review --weekly-due`。通知正文必须原样使用返回的`weekly_delivery.notification_text`，由发布器附文档URL；completed后同日普通总结可沿用该文本更新原文档，但不能再通知一次。周末无待补时跳过采集和普通提醒。
+采集前先检查`weekly-status`；周末无待补跳过采集和普通提醒。`delivered_unacknowledged`或`needs_completion=true`时，将返回receipt原样保存私有JSON并直接`weekly-complete`，不能发布重发；`delivery_check_required`停止写入/发送，先核实未知结果。仅`due=true`才`daily-review --weekly-due`。21点或其他非提醒窗口只用原文档且`notification:null`静默归档，不能因all_delivered=true确认周报完成；generated留到下一09:30/13:30。到窗口后复用原pinned文档+原`weekly_delivery.notification_text`完整包，由发布器核验原文档并附URL；禁止改正文、通知text或key，手改冲突停止。文档与消息均验证后才确认收据，completed后更新原文档不再次通知。
 
 待补认领后正文和hash冻结，跨日恢复先核实既有文档/消息，不重新改写或盲目重发。完成确认后，普通日终可更新原文档并保留周内容，既有completed状态不因此撤销，同周不再新增文档或通知。
 

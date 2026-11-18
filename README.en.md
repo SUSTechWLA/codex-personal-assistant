@@ -12,8 +12,8 @@ This is an independent community project. Feishu access uses the official [lark-
 
 - Reads authorized Feishu/Codex activity, email and calendars through the official CLI and connected host tools.
 - Keeps stable task IDs, completion feedback, real deadlines and capacity checks in private records.
-- At 09:00/14:00/18:00, sends only 1–3 numbered self-only reminders, roughly 80–160 Chinese characters; no meaningful change means one next action, with no new document.
-- At 21:00, saves one `YYYY-MM-DD 工作总结`: up to three results, two concerns and three next-day actions, around 250–400 Chinese characters, shorter when evidence is limited.
+- At 09:30/13:30, sends only 1–3 numbered self-only reminders, roughly 80–160 Chinese characters; no meaningful change means one next action, with no new document.
+- At 21:00, silently archives one `YYYY-MM-DD 工作总结`: up to three results, two concerns and three next-day suggestions, around 250–400 Chinese characters. It sends no Feishu or original-chat recap and does not plan evening work.
 - Supports a flexible weekly review on Friday evening or the weekend, with catch-up on the next assistant run after downtime. Each week has one review, always merged into that week's Friday summary. Historical files remain untouched.
 - Runs from a saved local schedule without Dot. Delivery is disabled until authorized and configured.
 
@@ -83,7 +83,7 @@ For Gmail and Google Calendar, connect their tools in Codex. The skill organizes
 
 Save a local Codex schedule; Dot is optional. Installing the skill does not create a schedule. For example:
 
-> On workdays at 09:00, 14:00 and 18:00, send 1–3 numbered reminders to my Feishu assistant conversation, roughly 80–160 Chinese characters; if nothing changed, give one next action. Save no daytime documents. At 21:00, save one “YYYY-MM-DD 工作总结” with up to three results, two concerns and three next-day actions, roughly 250–400 characters or shorter when appropriate. Omit methods, source paths, tables, evidence IDs, long learning lists and coverage tables; include only one decision-relevant caveat if needed. Do not update project/goal/learning/navigation files automatically. Keep a concise original-chat fallback and confirm the schedule, time zone and destination.
+> On workdays at 09:30 and 13:30, send 1–3 numbered reminders to my Feishu assistant conversation, roughly 80–160 Chinese characters; if nothing changed, give one next action. Save no daytime documents. Cancel the 18:00 review; I plan my evenings. At 21:00, silently archive one “YYYY-MM-DD 工作总结” with up to three results, two concerns and three next-day suggestions, around 250–400 characters. Send no Feishu or original-chat message and assign no evening work. Omit implementation details, paths, tables, evidence IDs and long learning lists. Do not update project/goal/learning/navigation files automatically. Keep a concise original-chat fallback only in the two reminder windows, and confirm the saved schedule, time zone and destination.
 
 Adjust times to the actual workday and verify the task in Scheduled. Use `plan --preview` JSON for internal daytime planning; it creates no Markdown or ICS. The original `plan` remains available only for a separately requested calendar draft. Local work needs the computer online with the desktop app running; API success does not guarantee a system alert.
 
@@ -95,7 +95,7 @@ A Dot can coordinate this only after separate computer connection and destinatio
 
 ## Deliver results to personal Feishu
 
-Daytime bundles use `documents:[]` plus a valid notification, without accessing cloud files or a root; both empty is rejected. At night, publish only one summary under `brief:<date>:review` in `01 每日工作/YYYY/MM`, updating the same key. Stable notification keys are `notify:<date>:<slot>`. Do not delete, move or reorganize historical files, or update navigation each run.
+The 09:30/13:30 reminder bundles use `documents:[]` plus a valid notification, without accessing cloud files or a root. At 21:00, publish one summary with `notification:null` under `brief:<date>:review` in `01 每日工作/YYYY/MM`, then finish silently after readback. Ordinary reminder keys are `notify:<date>:morning|changes`; weekly notifications retain their Friday review key but wait for the next reminder window. Do not delete, move or reorganize historical files, or update navigation each run.
 
 For an existing review key, retain the manifest-bound title, folder and token; do not create another key to rename an older report. New dates default to “YYYY-MM-DD 工作总结”; a weekly report may use “YYYY-MM-DD 工作总结（含周报）”. Weekly `report_date` is fixed to the target Friday. Retain `brief:<report_date>:review` and `notify:<report_date>:review` across retries rather than changing dates or adding a weekly key/navigation update. The one-document limit applies only to routine assistant output, not separately requested requirements/technical documents. Preserve existing requirements documents.
 
@@ -151,3 +151,5 @@ Tests cover atomic imports, deduplication and terminal state protection, calenda
 Search matches are not complete conversations, and a primary calendar is not every work calendar. Model extraction can be wrong. Uncertain owners and dates stay pending confirmation. On runtimes without IANA time-zone data, Asia/Shanghai and UTC have built-in fallbacks; other zones may require OS time-zone data or `tzdata`.
 
 See the [changelog](CHANGELOG.md) for updates. Contributions are welcome under the [MIT License](LICENSE). Use synthetic examples in issues and remove account identifiers, personal messages, tokens and authorization links before sharing diagnostics.
+
+Notifications run only at 09:30/13:30. At 21:00 or any other non-reminder time, archive documents with notification:null and send no original-chat recap; a generated weekly review stays pending for the next window. Document-only all_delivered=true cannot complete weekly delivery. In the next window, reuse the original pinned document plus unchanged weekly_delivery.notification_text as a full bundle so the publisher verifies the document and appends its URL; do not regenerate, switch keys or bypass manual-edit conflicts. Confirm completion only after document and self-message verification. Friday 18:00 is an eligibility threshold, not an extra review schedule.

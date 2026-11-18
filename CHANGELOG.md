@@ -2,6 +2,11 @@
 
 ## 2026-11-18
 
+### Two reminder windows and silent archiving
+
+- Changed the recommended reminder cadence to 09:30 and 13:30; removed the 18:00 review and unsolicited evening work planning.
+- Kept one 21:00 daily summary as a silent archive, with no Feishu or original-chat recap. A weekly report generated outside the reminder windows waits for the next window to notify and confirm delivery.
+
 ### Weekly review in the single evening summary
 
 - Added opt-in weekly reviews available from Friday evening, with weekend or next-online-run catch-up rather than requiring Friday 21:00. They aggregate the target week's verified private journal facts and preserve coverage gaps.
