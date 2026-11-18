@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-11-18
+
+### Weekly review in the single evening summary
+
+- Added opt-in weekly reviews available from Friday evening, with weekend or next-online-run catch-up rather than requiring Friday 21:00. They aggregate the target week's verified private journal facts and preserve coverage gaps.
+- Added `daily-review --weekly` for a manual offline preview. Weekly content reuses the date's review Markdown/JSON and Feishu review/notification keys rather than creating another document.
+- Added read-only pending status, due-review generation and receipt-verified completion. A report retains its target Friday date and review/notification keys across weekend or later retries.
+- Kept the weekly view concise: up to three results, two risks or unfinished items and three next-week priorities. Recurrence still requires the existing saved host task, not a Python daemon or another automation.
+
 ## 2026-11-11
 
 ### Concise routine output

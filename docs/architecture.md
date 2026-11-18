@@ -71,7 +71,7 @@ SQLite 的 `sources`、`goals`、`tasks`、`events` 表按稳定 ID 保存 JSON 
 
 工作状态为`completed/in_progress/blocked/cancelled`。`completed`还必须提供`outcome`及`completion_basis:artifact/test/commit/user_confirmation`；这些类型标签只是校验字段，真实证据仍须由Codex核实。活动时间必须属于本批工作日期且不晚于`observed_at`；来源必须在本日已有或由本批coverage提供。同一成果ID不能跨日期复用，也不能为重复简报每天新建成果。
 
-内部建议类别仍为`next_day/learning/risk/focus`；显式数组替换本日整组、空数组清除，未提供则保留。完整建议只存私有JSON，不自动变为日报长清单、硬任务或OKR。title/outcome一条一句、约40字，只放结论；技术细节在evidence或已有需求/技术文档，formatter不代替模型做语义总结，也不硬截半句。
+内部建议类别为`next_day/next_week/learning/risk/focus`；把目标周五核实的下周建议标为`next_week`，普通日仍用`next_day`。周报只采用目标周五的`next_week`或`focus`，跨周补跑不引用周一新建议，不把明日/周末计划改称下周；没有明确建议时，当前本人待办只能作为待确认重点。显式数组替换本日整组、空数组清除，未提供则保留。完整建议只存私有JSON，不自动变为日报长清单、硬任务或OKR。title/outcome一条一句、约40字，只放结论；技术细节在evidence或已有需求/技术文档，formatter不代替模型做语义总结，也不硬截半句。
 
 以下是**人工构造的工作日志示例**，不代表真实用户或真实测试结果，仅说明字段。先创建被Git忽略的`data/`目录，再保存为`data/reviewed-work.json`；真实工作导入文件不要放仓库根目录。
 
@@ -192,4 +192,8 @@ SQLite 的 `sources`、`goals`、`tasks`、`events` 表按稳定 ID 保存 JSON 
 
 白天bundle为documents:[]加合法notification，通知key为notify:<date>:<slot>，不访问云文件或root；两者空不允许。21点只发布brief:<date>:review，目录沿用01 每日工作/YYYY/MM，同key更新。已有key保持manifest的实际title/folder/token，不为旧标题换key重建；新日期默认“YYYY-MM-DD 工作总结”。不自动更新项目/目标/学习/知识/导航，不删移历史文件。
 
-周报仅用户要求时约400–600字，成果/风险/下周各≤3，不增定时或周报文件；当晚生成则合并同一份总结。每天一份只限制例行助理输出，另行明确的需求/技术文档任务正常处理，既有需求文档不受影响。
+周报可用`output.weekly_enabled=true`启用（默认false），`weekly_day`为ISO星期、默认5，`weekly_due_time`默认`18:00`；`weekly_start_date`可限制启用周范围。周五傍晚起有机会就生成；未成功则周末或恢复在线后的下一次运行补跑，不要求21点在线。宿主更新现有任务，周末只检查待补周报、不发普通提醒；Python不自行调度。聚合目标周配置工作日内的私有journal事实，跨周不混新一周；核对证据和最新状态，保留覆盖缺口，不用流水或当前待办快照冒充周成果。简短保留目标周五成果，周部分本周成果≤3、风险/未完成≤2、下周重点≤3，约400–600字。`report_date`固定为目标周配置周报日（默认周五），补跑仍沿用其review的MD/JSON、`brief:<report_date>:review`、`notify:<report_date>:review`，同周只一份，每日最多一份；已有title/folder/token不变，新报告日可用“YYYY-MM-DD 工作总结（含周报）”。后续同日普通总结保留周内容，独立需求/技术文档任务不受影响。
+
+`weekly-status --now <带时区ISO时间>`只读返回`due/week_start/week_end/report_date/state`。`daily-review --weekly-due --now <带时区ISO时间>`认领到期目标周并离线生成，私有journal中的`weekly_runs`保存状态和正文快照；普通日报或本地生成不算交付。认领后待核实的正文与hash冻结，跨日恢复先核实已有文档/消息，不重新改写正文或盲目重发。只有真实发布收据与私有manifest的文档、正文hash、URL、通知message ID均匹配，才运行`weekly-complete --week-start YYYY-MM-DD --receipt data/真实投递收据.json --now <带时区ISO时间>`确认完成。完成后普通日终可更新同一文档并保留周内容，不能重建第二份或再次通知周报。日常运行可省略`--now`。
+
+状态检查必须早于采集：周末无待补直接结束；`delivered_unacknowledged`或`needs_completion=true`时，原样保存返回的`receipt`并直接确认，不再发布；`delivery_check_required`停止写入/发送，先核实未知结果。仅`due=true`进入`--weekly-due`。通知必须原样使用生成结果`weekly_delivery.notification_text`，由发布器附URL；completed后普通日终可沿用相同文本更新文档，但不得再次通知。收据字段为`week_start,report_date,document_key,report_hash,document_url,notification_key,message_id`，必须与真实manifest匹配，不自行编造。

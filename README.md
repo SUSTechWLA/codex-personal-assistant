@@ -12,7 +12,7 @@
 - 内部账本保护稳定ID、完成反馈、真实截止与现实容量，证据私有留存。
 - 09/14/18只给本人编号1–3条、约80–160汉字的提醒；无变化只1条下一步，不保存新文档。
 - 21点只保存一份`YYYY-MM-DD 工作总结`：成果≤3、问题≤2、明日计划≤3，约250–400字，信息少可更短。
-- 不自动新增或更新项目、目标、学习、导航或周报文件；旧云文件保留。
+- 可启用弹性周报：周五傍晚或周末有机会时生成，离线则下次运行补跑；同周仅一份，始终并入该周周五的唯一总结，旧云文件保留。
 - 本机定时即可，不需要Dot；消息与夜间写入默认关闭，需完成本人授权及实际配置。
 
 原始采集不会直接成为成果。`collect-feishu`只保存私有raw和来源覆盖，Codex再核实行动；邮件采集限定INBOX ID列表，正文未授权不能总结。助手投递/自检不算业务研发，来源失败也不等于没有工作。
@@ -39,7 +39,7 @@ Windows PowerShell 可使用已安装的 Python，或使用项目启动器自动
 
 `init` 创建本地配置与空账本，不会生成演示任务、登录服务或创建定时任务。第一次没有任务时得到空计划是正常结果。打开生成的 `config.json`，设置时区、本人称呼、工作日、工作时段和所需来源；[config.example.json](config.example.json) 提供配置示例。默认工作时间为周一至周五 09:00–12:00、13:00–18:00，可自行添加晚间时段。
 
-示例的`output`字段记录供技能和定时任务遵循的输出偏好；Python不会动态强制执行其中每个时间或字数字段，精简日报仍采用固定条数与短句规则。
+示例的`output`字段记录供技能和定时任务遵循的输出偏好；Python不会动态强制执行其中每个时间或字数字段，精简日报仍采用固定条数与短句规则。`weekly_enabled`默认false，`weekly_day`默认5（ISO周五）。周报采用下文的弹性补跑规则，不要求电脑周五21点在线；这个配置不创建定时任务。
 
 在 Codex 中打开这个目录，安装技能：
 
@@ -85,7 +85,9 @@ Gmail 和 Google Calendar 使用 Codex 已连接的插件工具。本项目脚�
 
 时间按实际工作窗口调整，去Scheduled确认确实保存。固定提醒每次交付，额外轮询无变化才静默。白天用`plan --preview`的stdout JSON在内部排程，不生成MD/ICS；普通plan只在用户另要日历草案时使用。需要本地资料时电脑须在线、桌面应用运行；系统弹窗仍受通知设置影响。
 
-周报只在用户要求时给，约400–600字，成果/风险/下周计划各≤3项，不新增定时或周报文件；若当晚生成，合并当晚同一份总结。技术细节放适用且已有授权的现有需求/技术文档，不为隐藏冗余另建文件。内部证据和完整机器JSON仍私有保留，不复制到简报。
+需要自动周报时，将`output.weekly_enabled`设为true、`weekly_day`设为5、`weekly_due_time`设为`18:00`，并让宿主更新现有助理任务：周五18点起有机会就生成；未成功时，周末或恢复在线后的下一次助理运行补跑。同周只留一份，`report_date`始终为目标周周五，周末或跨周重试仍更新该周五的文档与通知key，不另建实际运行日的周报。可设`weekly_start_date`限制启用后的周范围，避免追溯不需要的历史周；公开示例默认null。周末只处理待补周报，没有待补则不发普通日间提醒。
+
+合并稿简短保留目标周五的已核实成果，周部分约400–600字：本周成果≤3、风险/未完成≤2、下周重点≤3。依据私有工作日志聚合目标周配置工作日的事实，跨周补跑也不混入新一周成果或建议；周五提前生成时如实标明截至当次采集。缺少覆盖如实说明，不拼接每日流水，不把方案或仿真写成已实现或真机验收。复跑反映最新已核实修正，不还原历史时点。手动离线生成仍复用目标周五review文件，不创建新日程或单独周报；技术细节留在已有授权的需求/技术文档，完整证据和机器JSON仍私有保留。
 
 Dot只是可选协调入口，须另行连接电脑并确认目的地；不能把定时已保存说成Dot已接通。
 
@@ -93,7 +95,7 @@ Dot只是可选协调入口，须另行连接电脑并确认目的地；不能�
 
 白天用`documents:[]`加合法notification的只消息bundle，不访问云文件或root；两者都空则拒绝。21点bundle只包含一份日终总结，key固定`brief:<date>:review`，目录沿用`01 每日工作/YYYY/MM`，同key更新。通知key为`notify:<date>:<slot>`，避免复跑重复发。旧文件不擅删、移动或整理，根导航不每轮更新。
 
-已有同日期review key时沿用manifest实际title/folder/token，不因旧标题换key重建；新日期默认标题为“YYYY-MM-DD 工作总结”。每日一份只约束例行助理输出，不限制你另行明确要求的需求/技术文档；已有需求文档保留，不擅删、移动或停用。
+已有同日期review key时沿用manifest实际title/folder/token，不因旧标题换key重建；新日期默认标题为“YYYY-MM-DD 工作总结”，含周报可用“YYYY-MM-DD 工作总结（含周报）”。周报的`report_date`固定为目标周周五，始终使用`brief:<report_date>:review`和`notify:<report_date>:review`；补跑也不更换日期或另起weekly key、不更新导航。每日一份只约束例行助理输出，不限制你另行明确要求的需求/技术文档；已有需求文档保留，不擅删、移动或停用。
 
 先创建被忽略的data目录，审阅输入存为`data/bundle.json`：
 
@@ -131,11 +133,16 @@ python3 assistant.py log-work data/reviewed-work.json
 python3 assistant.py update 'source:stable-task-id' --status done
 python3 assistant.py plan --preview --date 2026-11-11
 python3 assistant.py daily-review --date 2026-11-11
+python3 assistant.py daily-review --weekly --date 2026-11-13
+python3 assistant.py weekly-status
+python3 assistant.py daily-review --weekly-due
 python3 assistant.py --help
 python3 -m unittest discover -s tests -v
 ```
 
 PowerShell中创建目录可用`New-Item -ItemType Directory -Force data | Out-Null`。任务导入与工作日志是两种独立记录，日志不自动把待办设为完成。`log-work`输入须由Codex核实后生成，`daily-review`不凭空推断工作或学习需求。字段和人工示例见[架构与数据约定](docs/architecture.md)。
+
+每轮采集前先`weekly-status`：周末无待补直接结束；若`state=delivered_unacknowledged`或`needs_completion=true`，把返回的`receipt`原样保存为私有JSON并直接`weekly-complete`，不重新发布；`delivery_check_required`先停止写入/发送并核实未知结果。仅`due=true`才`daily-review --weekly-due`，通知原样采用返回的`weekly_delivery.notification_text`，由发布器附URL。认领后正文/hash冻结，恢复时不改写或盲重发。全文回读与本人通知均核实后，才用`weekly-complete --week-start YYYY-MM-DD --receipt data/真实投递收据.json`闭环；普通日报、本地生成和预览不算交付。完成后日终可更新原文档并保留周内容，但不再次通知周报。`--now`可用于可控时间测试，日常省略。
 
 ## 验证范围与限制
 

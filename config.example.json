@@ -21,6 +21,10 @@
     "daily_max_next_steps": 3,
     "cloud_daily_only": true,
     "refresh_overviews": false,
+    "weekly_enabled": false,
+    "weekly_day": 5,
+    "weekly_due_time": "18:00",
+    "weekly_start_date": null,
     "weekly_max_chars": 600,
     "weekly_separate_document": false
   },

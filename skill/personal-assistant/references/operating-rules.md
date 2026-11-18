@@ -40,7 +40,7 @@
 
 用 `log-work data/reviewed-work.json` 保存独立工作日志，envelope 为 `date,observed_at,coverage,entries` 和可选 `recommendations`。`coverage` 每项为 `source,status,scope,source_ref`，状态沿用 `ok/partial/unavailable`；把当天真实检查的 `codex_activity` 范围写入，不把未读范围设为完整。`entries` 每项必需 `id,title,status,occurred_at,source,source_ref,evidence`，状态为 `completed/in_progress/blocked/cancelled`，可补 `outcome,project,task_id,completion_basis`。`completed` 还必须有 `outcome` 与 `completion_basis:artifact/test/commit/user_confirmation`；类型标签本身不证明真实完成，先核实对应证据。活动时间必须属于配置时区的本日并不晚于采集时间，日期时间均带时区。
 
-同一成果复用稳定ID，不按聊天数量或重复简报累计成果。该日志存于被忽略的 `data/journal.sqlite3`，不会自动把待办设为done或修改目标；若任务也已完成，应另核对ID并更新原账本。推荐项使用 `id,category,title,why,small_action,source_ref`，可补1–5整数 `priority`；`category` 为 `next_day/learning/risk/focus`。显式提供 `recommendations` 时代表本轮核实后的整组建议，空数组用于清除；未提供则保留已有建议，避免一次少读误删上下文。
+同一成果复用稳定ID，不按聊天数量或重复简报累计成果。该日志存于被忽略的 `data/journal.sqlite3`，不会自动把待办设为done或修改目标；若任务也已完成，应另核对ID并更新原账本。推荐项使用 `id,category,title,why,small_action,source_ref`，可补1–5整数 `priority`；`category` 为 `next_day/next_week/learning/risk/focus`。把目标周配置周报日（默认周五）核实的下周建议写为`next_week`，普通日仍用`next_day`；周报只采用目标周配置周报日（默认周五）的`next_week`或`focus`，跨周补跑不引用周一新建议，不把明日/周末计划改称下周。显式提供 `recommendations` 时代表本轮核实后的整组建议，空数组用于清除；未提供则保留已有建议，避免一次少读误删上下文。
 
 21:00补齐并核实内部记录后运行`daily-review --date YYYY-MM-DD`。默认MD是精简工作总结，仅成果/问题/明日计划；同名机器JSON保留完整证据、日历快照和建议，不复制给用户。采用返回的真实路径，不把早晨计划算成成果；无证据不虚报。用户可见格式与唯一云文档规则见后文。
 
@@ -82,8 +82,12 @@
 
 白天编号1–3条、总约80–160汉字，一条一结论；无变化只1条下一步，不凑字数。09点选当下最重要动作，14点只改实质变化，18点只给剩余工作下一步。不要把内部证据、方法、路径、ID、覆盖表或完整时间表照搬到消息。
 
-21点唯一工作总结总约250–400字，三类内容：今日成果≤3、问题/需关注≤2（无则省）、明日计划≤3。只写结论，不放表格、方法细节、源码路径、证据、ID、冗长学习建议或来源覆盖表。信息少可更短；没有完成证据不虚报，重要且影响决策的缺口最多末尾一句。学习仅在确实影响当下决策时浓缩成一条问题提醒，不要求每晚给建议。
+普通日21点唯一工作总结总约250–400字，三类内容：今日成果≤3、问题/需关注≤2（无则省）、明日计划≤3。只写结论，不放表格、方法细节、源码路径、证据、ID、冗长学习建议或来源覆盖表。信息少可更短；没有完成证据不虚报，重要且影响决策的缺口最多末尾一句。学习仅在确实影响当下决策时浓缩成一条问题提醒，不要求每晚给建议。
 
-周报只有用户要求时给，约400–600字，成果/风险/下周计划各≤3项；不新增定时任务或周报文件。若当晚生成，合并当晚唯一review文档，不能另建一份。内部journal、完整机器JSON、来源证据和manifest仍私有保留，不算用户可见文档；助手投递与自检不当作研发成果。
+周报由`output.weekly_enabled=true`启用，`weekly_day`为ISO星期、默认5，`weekly_due_time`默认`18:00`，`weekly_start_date`可限制启用周范围；默认安装不启用。周五傍晚起有机会就生成，未成功则周末或恢复在线后的下一次运行补跑，不要求21点在线。复用宿主现有任务，Python不自行调度；周末无待补周报时不发普通提醒。先用`weekly-status`只读检查，再用`daily-review --weekly-due`认领到期周报并离线生成。严格使用返回的目标周配置周报日（默认周五）`report_date`和路径，跨日/跨周仍复用其review及通知key，同周仅一份。简短保留目标周配置周报日（默认周五）成果，周部分约400–600字：本周成果≤3、风险/未完成≤2、下周重点（建议）≤3；信息少不凑数，按目标周配置工作日聚合journal核实事实，不混入新一周，提前生成注明采集截止。缺覆盖如实，不复制流水或实现日志，不把方案当实现、仿真当真机验收。始终用`brief:<report_date>:review`、`notify:<report_date>:review`；文档全文、hash、URL与本人通知message ID核实后，用`weekly-complete --week-start YYYY-MM-DD --receipt <真实私有收据.json>`确认。普通日报、预览或离线生成不算交付，未知结果先核实不盲重发，后续同日总结保留周内容。`--now`只用于指定检查时间，日常省略。完整证据和manifest私有保留，不另建weekly key、文件或导航；助手投递与自检不算研发成果。
 
-已有同日期review key时，沿用manifest绑定的实际title、folder和token；不能为了把旧标题“工作日报”换成“工作总结”而换key或另建。只有新日期默认标题为“YYYY-MM-DD 工作总结”。每天一份限制仅针对例行助理输出；用户另行明确要求需求/技术文档时按独立任务正常处理，既有需求文档保留，不因简洁偏好删除、移动或停用。
+先检查`weekly-status`再采集。若`state=delivered_unacknowledged`或`needs_completion=true`，将返回的`receipt`原样保存为私有JSON，直接`weekly-complete`，不能重新发布或发消息；若`state=delivery_check_required`，停止周报写入/发送，先核实未知结果。仅`due=true`才`daily-review --weekly-due`。通知正文必须原样使用返回的`weekly_delivery.notification_text`，由发布器附文档URL；completed后同日普通总结可沿用该文本更新原文档，但不能再通知一次。周末无待补时跳过采集和普通提醒。
+
+待补认领后正文和hash冻结，跨日恢复先核实既有文档/消息，不重新改写或盲目重发。完成确认后，普通日终可更新原文档并保留周内容，既有completed状态不因此撤销，同周不再新增文档或通知。
+
+已有同日期review key时，沿用manifest绑定的实际title、folder和token；不能为改标题而换key或另建。新日期默认标题为“YYYY-MM-DD 工作总结”，含周报时可用“YYYY-MM-DD 工作总结（含周报）”。每天一份限制仅针对例行助理输出；用户另行明确要求需求/技术文档时按独立任务正常处理，既有需求文档保留，不因简洁偏好删除、移动或停用。

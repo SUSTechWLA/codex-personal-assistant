@@ -27,7 +27,9 @@ DEFAULT_CONFIG = {
         "style": "concise", "daytime_max_items": 3, "daytime_max_chars": 160,
         "daytime_save_document": False, "daily_save_time": "21:00", "daily_max_chars": 400,
         "daily_max_achievements": 3, "daily_max_next_steps": 3, "cloud_daily_only": True,
-        "refresh_overviews": False, "weekly_max_chars": 600, "weekly_separate_document": False,
+        "refresh_overviews": False, "weekly_enabled": False, "weekly_day": 5,
+        "weekly_due_time": "18:00", "weekly_start_date": None,
+        "weekly_max_chars": 600, "weekly_separate_document": False,
     },
     "integrations": {
         "feishu": {
@@ -128,6 +130,26 @@ def load_config(root):
     required = config.get("required_sources")
     if not isinstance(required, list) or any(not isinstance(s, str) or not s.strip() for s in required):
         raise ValidationError("required_sources 应为来源 ID 数组")
+    output = config.get("output", {})
+    if not isinstance(output, dict) or type(output.get("weekly_enabled", False)) is not bool:
+        raise ValidationError("output.weekly_enabled 应为布尔值")
+    weekly_day = output.get("weekly_day", 5)
+    if type(weekly_day) is not int or not 1 <= weekly_day <= 7:
+        raise ValidationError("output.weekly_day 应为 ISO 星期数字 1–7")
+    if output.get("weekly_enabled", False) and weekly_day not in days:
+        raise ValidationError("output.weekly_day 必须属于配置的 workdays")
+    bounded_number(output.get("weekly_max_chars", 600), "output.weekly_max_chars", 400, 2000, integer=True)
+    try:
+        due_time = time.fromisoformat(output.get("weekly_due_time", "18:00"))
+    except (TypeError, ValueError) as exc:
+        raise ValidationError("output.weekly_due_time 应为 HH:MM") from exc
+    if due_time.tzinfo or due_time.second or due_time.microsecond:
+        raise ValidationError("output.weekly_due_time 应为不带时区的 HH:MM")
+    if output.get("weekly_start_date") is not None:
+        try:
+            date.fromisoformat(output["weekly_start_date"])
+        except (TypeError, ValueError) as exc:
+            raise ValidationError("output.weekly_start_date 应为 ISO 日期或 null") from exc
     return config
 
 
@@ -569,6 +591,14 @@ def main(argv=None):
     review_cmd = commands.add_parser("daily-review", help="生成有来源的全天工作日报和建议")
     review_cmd.add_argument("--date", type=date.fromisoformat)
     review_cmd.add_argument("--now", type=parse_dt)
+    review_cmd.add_argument("--weekly", action="store_true", help="将本周截至报告日的工作回顾合入同一份总结，不另建周报文件")
+    review_cmd.add_argument("--weekly-due", action="store_true", help="生成或重用最早待交付周的周五总结；晚到运行不改变归档日期")
+    weekly_cmd = commands.add_parser("weekly-status", help="查看到期未交付周及发布状态，不触网或创建文档")
+    weekly_cmd.add_argument("--now", type=parse_dt)
+    weekly_complete_cmd = commands.add_parser("weekly-complete", help="核对私有飞书文档与消息回执后，确认某周已经交付")
+    weekly_complete_cmd.add_argument("--week-start", required=True, type=date.fromisoformat)
+    weekly_complete_cmd.add_argument("--receipt", required=True, type=Path)
+    weekly_complete_cmd.add_argument("--now", type=parse_dt)
     publish_cmd = commands.add_parser("publish-feishu", help="预览或发布已审阅资料到本人飞书专属云空间；默认不触网")
     publish_cmd.add_argument("file", type=Path)
     publish_cmd.add_argument("--apply", action="store_true", help="执行已配置的本人文档写入和可选通知")
@@ -594,7 +624,15 @@ def main(argv=None):
             from daily_review import write_review
             data = status(root)
             now = args.now or datetime.now(timezone.utc)
-            result = write_review(root, args.date or now.astimezone(get_tz(data["config"]["timezone"])).date(), now, data)
+            result = write_review(root, args.date or now.astimezone(get_tz(data["config"]["timezone"])).date(), now, data,
+                                  weekly=args.weekly, weekly_due=args.weekly_due)
+        elif args.command == "weekly-status":
+            from weekly_review import weekly_status
+            result = weekly_status(root, args.now or datetime.now(timezone.utc), load_config(root))
+        elif args.command == "weekly-complete":
+            from weekly_review import complete_week
+            result = complete_week(root, args.week_start, json.loads(args.receipt.read_text(encoding="utf-8-sig")),
+                                   args.now or datetime.now(timezone.utc), load_config(root))
         elif args.command == "publish-feishu":
             from feishu_delivery import publish
             result = publish(root, json.loads(args.file.read_text(encoding="utf-8-sig")), load_config(root), apply=args.apply)

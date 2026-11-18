@@ -14,7 +14,7 @@ This is an independent community project. Feishu access uses the official [lark-
 - Keeps stable task IDs, completion feedback, real deadlines and capacity checks in private records.
 - At 09:00/14:00/18:00, sends only 1–3 numbered self-only reminders, roughly 80–160 Chinese characters; no meaningful change means one next action, with no new document.
 - At 21:00, saves one `YYYY-MM-DD 工作总结`: up to three results, two concerns and three next-day actions, around 250–400 Chinese characters, shorter when evidence is limited.
-- Does not automatically add or update project, goal, learning, navigation or weekly files. Historical cloud files remain untouched.
+- Supports a flexible weekly review on Friday evening or the weekend, with catch-up on the next assistant run after downtime. Each week has one review, always merged into that week's Friday summary. Historical files remain untouched.
 - Runs from a saved local schedule without Dot. Delivery is disabled until authorized and configured.
 
 Collection is not an accomplishment. Codex reviews private raw results before extracting actions. Mail listing is limited to INBOX IDs; unauthorized bodies stay unread. Assistant delivery/self-checks are not product-development results, and failed reads are not empty success.
@@ -41,7 +41,7 @@ On Windows, use a working Python command or the launcher, which can also locate 
 
 `init` creates a configuration and an empty ledger. It does not add demo tasks, authenticate services or create schedules. Edit the generated `config.json` for your identity, time zone and working hours; see [config.example.json](config.example.json). Defaults are weekdays, 09:00–12:00 and 13:00–18:00, with 70% of available time allocated.
 
-The example’s `output` fields record preferences for the skill and schedule. Python does not dynamically enforce every time or length field; compact reviews use fixed item limits and short-sentence rules.
+The example’s `output` fields record preferences for the skill and schedule. Python does not dynamically enforce every time or length field; compact reviews use fixed item limits and short-sentence rules. `weekly_enabled` defaults to false and ISO `weekly_day` defaults to 5 (Friday). The flexible catch-up workflow below does not require the computer to be online at 21:00 on Friday. This setting does not create a schedule.
 
 Install the skill after reviewing its destination:
 
@@ -87,7 +87,9 @@ Save a local Codex schedule; Dot is optional. Installing the skill does not crea
 
 Adjust times to the actual workday and verify the task in Scheduled. Use `plan --preview` JSON for internal daytime planning; it creates no Markdown or ICS. The original `plan` remains available only for a separately requested calendar draft. Local work needs the computer online with the desktop app running; API success does not guarantee a system alert.
 
-Weekly reviews are on request only, roughly 400–600 Chinese characters, with up to three results, risks and next-week actions. They create no extra schedule or weekly file; merge an evening review into that night’s single summary. Keep technical detail in applicable existing requirements/technical documents, without creating extra files to hide verbosity. Full evidence and machine JSON remain private.
+For automatic weekly reviews, set `output.weekly_enabled` to true, `weekly_day` to 5 and `weekly_due_time` to `18:00`, then update the existing host task: generate when available from Friday evening; if unfinished, catch up on the weekend or the next assistant run after downtime. Each week has one review with `report_date` fixed to the target week's Friday. Weekend or later retries update that Friday's document and notification keys rather than creating a report for the execution date. Optional `weekly_start_date` limits the first eligible week; the public example defaults to null. Weekend runs only handle a pending weekly review, without ordinary daytime reminders.
+
+Retain a short account of the target Friday's verified results, then keep the weekly view around 400–600 Chinese characters: at most three results, two risks/unfinished items and three next-week priorities. Aggregate private journal facts for the target week's configured workdays, keeping a delayed prior-week report separate from the new week's facts and recommendations. An early Friday report states its actual collection cutoff. Preserve material coverage gaps; do not concatenate daily logs, treat a proposal as an implementation, or treat simulation as hardware acceptance. Reruns reflect the latest verified corrections rather than reconstructing a historical point in time. Manual offline generation reuses the target Friday's review files, without another schedule or weekly document. Technical detail belongs in authorized existing requirements/technical documents; full evidence and machine JSON remain private.
 
 A Dot can coordinate this only after separate computer connection and destination verification. A saved local schedule does not prove Dot access.
 
@@ -95,7 +97,7 @@ A Dot can coordinate this only after separate computer connection and destinatio
 
 Daytime bundles use `documents:[]` plus a valid notification, without accessing cloud files or a root; both empty is rejected. At night, publish only one summary under `brief:<date>:review` in `01 每日工作/YYYY/MM`, updating the same key. Stable notification keys are `notify:<date>:<slot>`. Do not delete, move or reorganize historical files, or update navigation each run.
 
-For an existing review key, retain the manifest-bound title, folder and token; do not create another key to rename an older report. New dates default to “YYYY-MM-DD 工作总结”. The one-document limit applies only to routine assistant output, not separately requested requirements/technical documents. Preserve existing requirements documents.
+For an existing review key, retain the manifest-bound title, folder and token; do not create another key to rename an older report. New dates default to “YYYY-MM-DD 工作总结”; a weekly report may use “YYYY-MM-DD 工作总结（含周报）”. Weekly `report_date` is fixed to the target Friday. Retain `brief:<report_date>:review` and `notify:<report_date>:review` across retries rather than changing dates or adding a weekly key/navigation update. The one-document limit applies only to routine assistant output, not separately requested requirements/technical documents. Preserve existing requirements documents.
 
 Create the ignored data directory and save reviewed input as `data/bundle.json`:
 
@@ -132,10 +134,15 @@ python3 assistant.py log-work data/reviewed-work.json
 python3 assistant.py update 'source:stable-task-id' --status done
 python3 assistant.py plan --preview --date 2026-11-11
 python3 assistant.py daily-review --date 2026-11-11
+python3 assistant.py daily-review --weekly --date 2026-11-13
+python3 assistant.py weekly-status
+python3 assistant.py daily-review --weekly-due
 python3 -m unittest discover -s tests -v
 ```
 
 In PowerShell, create the directory with `New-Item -ItemType Directory -Force data | Out-Null`. Task imports and work logs are independent: logging an activity does not mark a task done. Codex must review inputs before `log-work`; `daily-review` does not invent work or learning needs. It writes `reports/YYYY-MM-DD-review.md` and a matching JSON file. See [architecture and data contracts](docs/architecture.md) for fields and a synthetic example.
+
+Run `weekly-status` before collection; on weekends, stop if no review is pending. For `state=delivered_unacknowledged` or `needs_completion=true`, save the returned `receipt` unchanged as private JSON and call `weekly-complete` without publishing again. For `delivery_check_required`, stop writes/sends and verify the uncertain result. Only `due=true` calls `daily-review --weekly-due`; use its `weekly_delivery.notification_text` unchanged and let the publisher append the document URL. Pending content/hash are frozen across recovery. After verifying the full document and self-notification, confirm with `weekly-complete --week-start YYYY-MM-DD --receipt data/actual-delivery-receipt.json`. A daily report, local generation or preview is not delivery. After completion, an evening update may preserve the weekly content in the same document without another notification. Optional `--now` supports controlled-time testing.
 
 ## Validation and limitations
 

@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 ENTRY_STATUSES = {"completed", "in_progress", "blocked", "cancelled"}
 COMPLETION_BASES = {"artifact", "test", "commit", "user_confirmation"}
-CATEGORIES = {"next_day", "learning", "risk", "focus"}
+CATEGORIES = {"next_day", "next_week", "learning", "risk", "focus"}
 SCHEMA_VERSION = 1
 
 
@@ -114,6 +114,8 @@ def _connect(root):
             sequence INTEGER PRIMARY KEY AUTOINCREMENT,
             work_date TEXT NOT NULL, kind TEXT NOT NULL, record_id TEXT NOT NULL,
             observed_at TEXT NOT NULL, payload TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS weekly_runs (
+            week_start TEXT PRIMARY KEY, payload TEXT NOT NULL);
     """)
     db.commit()
     return db
@@ -247,7 +249,7 @@ def read_day(root, review_date):
     return result
 
 
-def build_review(root, review_date, now, ledger):
+def build_review(root, review_date, now, ledger, *, weekly=False):
     """A current task snapshot is context, never proof of a delivery on this day."""
     if not isinstance(review_date, date) or isinstance(review_date, datetime):
         raise ValueError("review_date must be a date")
@@ -281,7 +283,7 @@ def build_review(root, review_date, now, ledger):
         if task.get("owner") not in aliases and task.get("id") not in linked:
             continue
         task_context.append({key: task.get(key) for key in ("id", "title", "status", "due_at", "source_ref")})
-    return {"schema_version": SCHEMA_VERSION, "date": review_date.isoformat(),
+    result = {"schema_version": SCHEMA_VERSION, "date": review_date.isoformat(),
             "generated_at": now.isoformat(), "timezone": config["timezone"],
             "entries": sorted(data["entries"], key=lambda item: (_dt(item["occurred_at"], "occurred_at"), item["id"])),
             "task_context": sorted(task_context, key=lambda item: item["id"]),
@@ -290,6 +292,92 @@ def build_review(root, review_date, now, ledger):
             "coverage": data["coverage"], "coverage_gaps": gaps,
             "limits": ["工作事实由 Codex 核实后导入；系统不将聊天结束、计划或任务状态直接视为当日完成证据。",
                        "计划对照是生成时的任务账本快照，并非晨间原计划或历史状态；建议未写入任务、目标或在线日历。"]}
+    output = config.get("output", {})
+    if weekly or (output.get("weekly_enabled", False) and review_date.isoweekday() == output.get("weekly_day", 5)):
+        result["weekly"] = build_weekly(root, review_date, now, config, task_context)
+    return result
+
+
+def build_weekly(root, review_date, now, config, task_context):
+    """Aggregate journal observations, never report prose or a task snapshot as history.
+
+    Entries have globally stable IDs on one work date; task_id links observations
+    of the same work across dates. The latest evidenced state wins per task.
+    All independent observations remain available in the private machine report.
+    """
+    start = review_date - timedelta(days=review_date.weekday())
+    days = [start + timedelta(days=i) for i in range((review_date - start).days + 1)
+            if (start + timedelta(days=i)).isoweekday() in config["workdays"]]
+    day_keys = {day.isoformat() for day in days}
+    selected = {}
+    if _journal_path(root).exists():
+        with closing(sqlite3.connect(_journal_path(root))) as db:
+            rows = db.execute("SELECT sequence, work_date, kind, record_id, observed_at, payload FROM history "
+                              "WHERE work_date >= ? AND work_date <= ? ORDER BY sequence",
+                              (start.isoformat(), review_date.isoformat()))
+            for sequence, day, kind, record_id, observed, payload in rows:
+                if day not in day_keys or kind not in {"entry", "coverage", "recommendations"}:
+                    continue
+                observed = _dt(observed, "observed_at")
+                if observed > now:
+                    continue
+                item = json.loads(payload)
+                if kind == "entry" and _dt(item["occurred_at"], "occurred_at") > now:
+                    continue
+                key = (day, kind, record_id)
+                order = (observed, sequence)
+                if key not in selected or order > selected[key][0]:
+                    selected[key] = (order, item)
+    facts, coverage, recommendations = [], {day: [] for day in sorted(day_keys)}, []
+    for (day, kind, _), (order, item) in selected.items():
+        if kind == "entry":
+            facts.append({**item, "work_date": day, "observed_at": order[0].isoformat()})
+        elif kind == "coverage":
+            coverage[day].append(item)
+        elif day == review_date.isoformat():
+            # Earlier next-day suggestions can already be completed or withdrawn.
+            recommendations = item
+    facts.sort(key=lambda item: (_dt(item["occurred_at"], "occurred_at"),
+                                 _dt(item["observed_at"], "observed_at"), item["id"]))
+    work_items = {}
+    for item in facts:
+        key = "task:" + item["task_id"] if item.get("task_id") else "entry:" + item["id"]
+        work_items[key] = item
+    tasks = {item["id"]: item for item in task_context}
+    latest = list(work_items.values())
+    achievements = [item for item in latest if item["status"] == "completed" and not _routine(item)
+                    and tasks.get(item.get("task_id"), {}).get("status") != "cancelled"]
+    blocked = [item for item in latest if item["status"] == "blocked" and not _routine(item)
+               and tasks.get(item.get("task_id"), {}).get("status") not in {"done", "cancelled"}]
+    recommendations.sort(key=lambda item: (-item["priority"], item["id"]))
+    next_week = [item for item in recommendations if item["category"] in {"next_week", "focus"}]
+    if not next_week:
+        # These are explicitly current suggestions, not dated progress or promises.
+        next_week = [{**item, "category": "current_task_context", "small_action": "建议确认：" + item["title"]}
+                     for item in task_context if item["status"] in {"todo", "waiting"}
+                     and not any(fact.get("task_id") == item["id"] and fact["status"] in {"completed", "cancelled"}
+                                 for fact in latest)]
+    risks = [*blocked, *[item for item in recommendations if item["category"] == "risk"]]
+    required = set(config.get("required_sources", [])) | {"codex_activity"}
+    gaps, missing_workdays = [], []
+    for day, sources in coverage.items():
+        by_source = {item["source"]: item for item in sources}
+        sources.sort(key=lambda item: item["source"])
+        if by_source.get("codex_activity", {}).get("status") in {None, "unavailable"}:
+            missing_workdays.append(day)
+        for source in sorted(required | set(by_source)):
+            item = by_source.get(source)
+            if not item or item["status"] != "ok":
+                gaps.append({"date": day, "source": source, "status": item["status"] if item else "missing",
+                             "scope": item["scope"] if item else "本工作日尚未记录采集覆盖，不能据此认定没有工作"})
+    return {"start_date": start.isoformat(), "end_date": review_date.isoformat(),
+            "workdays": sorted(day_keys), "next_week_start": (start + timedelta(days=7)).isoformat(),
+            "entries": facts, "work_items": latest, "achievements": achievements, "risks": risks,
+            "next_week": next_week, "coverage": [{"date": day, "sources": sources} for day, sources in coverage.items()],
+            "missing_workdays": missing_workdays, "coverage_gaps": gaps,
+            "max_chars": config.get("output", {}).get("weekly_max_chars", 600),
+            "limits": ["同一 task_id 只按最新证据状态计一次成果；无关联 ID 的独立事实不会凭相似标题合并。",
+                       "任务账本只提供当前建议与完成/取消反馈，不补造本周历史；下周重点均为建议。"]}
 
 
 def _md(value):
@@ -341,10 +429,10 @@ def _brief_sentence(item, fields, fallback, limit=36):
     return fallback
 
 
-def _brief_items(items, fields, fallback, maximum):
+def _brief_items(items, fields, fallback, maximum, *, limit=36):
     result = []
     for item in items:
-        sentence = _brief_sentence(item, fields, fallback)
+        sentence = _brief_sentence(item, fields, fallback, limit=limit)
         if sentence not in result:
             result.append(sentence)
         if len(result) == maximum:
@@ -375,6 +463,8 @@ def _coverage_note(review):
 
 def render_review(review):
     """A compact human brief; complete evidence remains in the private JSON."""
+    if "weekly" in review:
+        return render_weekly_review(review)
     lines = [f"# {review['date']} 工作总结", "", "**今日成果**"]
     completed = _brief_completed(review)
     lines.extend([f"{i}. {_md(text)}" for i, text in enumerate(completed, 1)] or ["尚无已核实的今日成果，不代表没有工作。"])
@@ -390,8 +480,66 @@ def render_review(review):
     return "\n".join([*lines, ""])
 
 
-def write_review(root, review_date, now, ledger):
-    review = build_review(root, review_date, now, ledger)
+def render_weekly_review(review):
+    """Keep today's result and the week in one concise, evidence-free document."""
+    week = review["weekly"]
+    today_items = _brief_completed({"entries": [item for item in week["achievements"] if item["work_date"] == review["date"]]})
+    today = "；".join(text.rstrip("。") for text in today_items) or "尚无已核实成果，不能据此认定没有工作"
+    if len(_md(today)) > 72:
+        today = today_items[0].rstrip("。")
+    if len(_md(today)) > 72:
+        today = "今日已有核实成果"
+    achievements = _brief_items(reversed(week["achievements"]), ("outcome", "title"), "已有核实成果，具体结果待简述。", 3, limit=44)
+    risks = _brief_items(week["risks"], ("outcome", "small_action", "title"), "有实质问题待确认。", 2, limit=44)
+    priorities = _brief_items(week["next_week"], ("small_action", "title"), "下周重点的具体动作待确认。", 3, limit=44)
+    for items, fallback in ((achievements, "已有核实成果，具体结果待简述。"), (risks, "有实质问题待确认。"),
+                            (priorities, "下周重点的具体动作待确认。")):
+        items[:] = [text if len(_md(text)) <= 60 else fallback for text in items]
+    note = None
+    if week["missing_workdays"]:
+        dates = "、".join(day[5:].replace("-", "/") for day in week["missing_workdays"])
+        note = f"注：{dates}工作活动未采集，周成果可能遗漏。"
+    elif any(item["status"] in {"missing", "unavailable"} for item in week["coverage_gaps"]):
+        note = "注：部分来源尚未读取，周报仅据已核实信息。"
+
+    def render():
+        lines = [f"# {review['date']} 工作总结", "", f"今日：{_md(today)}。", "",
+                 f"**本周成果（{week['start_date']}—{week['end_date']}）**"]
+        lines.extend([f"{i}. {_md(text)}" for i, text in enumerate(achievements, 1)] or ["尚无已核实的本周成果，不代表没有工作。"])
+        if risks:
+            lines.extend(["", "**问题/风险**", *[f"{i}. {_md(text)}" for i, text in enumerate(risks, 1)]])
+        lines.extend(["", "**下周重点（建议）**", *([f"{i}. {_md(text)}" for i, text in enumerate(priorities, 1)] or ["暂未确认下周重点。"])])
+        if note:
+            lines.extend(["", note])
+        return "\n".join([*lines, ""])
+
+    # Drop whole lower-ranked items instead of truncating a claim mid-sentence.
+    maximum = week["max_chars"]
+    rendered = render()
+    while len(rendered) > maximum and any(len(items) > 1 for items in (achievements, risks, priorities)):
+        candidates = [items for items in (priorities, risks, achievements) if len(items) > 1]
+        candidates[0].pop()
+        rendered = render()
+    if len(rendered) > maximum:
+        today = "已有核实成果" if today_items else "尚无已核实成果"
+        for items, fallback in ((achievements, "已有核实成果，具体结果待简述。"), (risks, "有实质问题待确认。"),
+                                (priorities, "下周重点的具体动作待确认。")):
+            items[:] = [text if len(_md(text)) <= 36 else fallback for text in items]
+        rendered = render()
+    return rendered
+
+
+def write_review(root, review_date, now, ledger, *, weekly=False, weekly_due=False):
+    from weekly_review import fingerprint, prepare_week, record_generation, saved_result
+    run = prepare_week(root, review_date, now, ledger["config"], due=weekly_due)
+    if weekly_due and run is None:
+        return {"weekly_due": False, "detail": "当前没有可生成的到期周；请以 weekly-status 核实待确认交付。"}
+    if run:
+        review_date = _day(run["report_date"])
+        weekly = True
+        if run.get("content_hash") and run["state"] != "completed":
+            return saved_result(root, run)
+    review = build_review(root, review_date, now, ledger, weekly=weekly)
     destination = Path(root) / "reports"
     destination.mkdir(parents=True, exist_ok=True)
     paths = {"report": destination / f"{review_date.isoformat()}-review.md",
@@ -411,7 +559,19 @@ def write_review(root, review_date, now, ledger):
     finally:
         for temporary, _ in staged:
             temporary.unlink(missing_ok=True)
-    return {**{key: str(value) for key, value in paths.items()}, "date": review["date"],
+    result = {**{key: str(value) for key, value in paths.items()}, "date": review["date"],
             "entries": len(review["entries"]), "completed": sum(item["status"] == "completed" for item in review["entries"]),
             "brief_completed": len(_brief_completed(review)),
             "next_day_suggestions": len(review["next_day"]), "coverage_gaps": review["coverage_gaps"]}
+    if "weekly" in review:
+        result["weekly"] = {"start_date": review["weekly"]["start_date"], "end_date": review["weekly"]["end_date"],
+                            "achievements": len(review["weekly"]["achievements"]),
+                            "missing_workdays": review["weekly"]["missing_workdays"]}
+    if run:
+        run = record_generation(root, run, now, paths["report"].read_text(encoding="utf-8"))
+        result["weekly_delivery"] = {key: run[key] for key in ("week_start", "week_end", "report_date", "state", "content_hash",
+                                                              "document_key", "notification_key", "notification_text")}
+        if run["state"] == "completed":
+            result["weekly_delivery"]["delivered_content_hash"] = run["content_hash"]
+            result["weekly_delivery"]["content_hash"] = fingerprint(paths["report"].read_text(encoding="utf-8"))
+    return result
