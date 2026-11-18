@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-11-19
+
+### Daily and weekly summary notifications
+
+- Restored the 21:00 daily summary notification and same-run notification after a verified weekly review, using concise self-messages and real document links.
+- Kept 09:30/13:30 daytime reviews, one saved document per report date, flexible weekly catch-up and stable notification keys; the 18:00 review and unsolicited evening work planning remain removed.
+- Supersedes the previous silent-archive and deferred-weekly-notification preference; generation alone still does not prove message delivery.
+
 ## 2026-11-18
 
 ### Two reminder windows and silent archiving

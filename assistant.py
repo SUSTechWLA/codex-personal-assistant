@@ -25,7 +25,7 @@ DEFAULT_CONFIG = {
     "profile": {"name": None, "aliases": ["self"]},
     "output": {
         "style": "concise", "daytime_max_items": 3, "daytime_max_chars": 160,
-        "review_times": ["09:30", "13:30"], "daily_notification_enabled": False,
+        "review_times": ["09:30", "13:30"], "daily_notification_enabled": True,
         "daytime_save_document": False, "daily_save_time": "21:00", "daily_max_chars": 400,
         "daily_max_achievements": 3, "daily_max_next_steps": 3, "cloud_daily_only": True,
         "refresh_overviews": False, "weekly_enabled": False, "weekly_day": 5,

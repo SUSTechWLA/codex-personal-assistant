@@ -32,7 +32,7 @@ flowchart LR
 | `assistant.py` | 配置验证、SQLite、导入、状态更新、排程及输出 |
 | `collect_feishu.py` | 调用已有的官方原生 CLI，采集四类只读来源 |
 | `daily_review.py` | 独立工作日志、成果核实、默认精简工作总结与私有完整JSON，不修改任务状态 |
-| `feishu_delivery.py` | 两窗口普通通知、21点静默文档；周报延后通知与稳定key去重 |
+| `feishu_delivery.py` | 日间编号提醒、21点日报与周报同轮通知；稳定key去重 |
 | `run-assistant.ps1` | Windows Python 运行时选择，不修改 PATH |
 | `install_skill.py` | 将可复用技能安装到选定位置并绑定项目根目录 |
 | `skill/personal-assistant/` | Codex 的来源读取、事实提炼、主动简报与操作约定 |
@@ -190,7 +190,7 @@ SQLite 的 `sources`、`goals`、`tasks`、`events` 表按稳定 ID 保存 JSON 
 
 ## 例行云交付的写入边界
 
-普通提醒仅09:30/13:30，用documents:[]加合法notification，不访问云root；待补周报复用原pinned文档+固定通知完整包是唯一例外。21点只发布brief:<date>:review且notification:null，目录沿用01 每日工作/YYYY/MM，同key更新并回读，DONT_NOTIFY静默结束。已有title/folder/token不变，不更新导航或删移历史文件。
+普通日间复盘仅09:30/13:30，用documents:[]加合法notification，不访问云root；待补周报复用pinned文档+固定通知完整包是例外。21点发布brief:<date>:review并附合法notification，目录沿用01 每日工作/YYYY/MM；同key更新与回读后通知本人简短摘要和真实URL，当前聊天NOTIFY兜底。已有title/folder/token不变，不更新导航或删移历史文件。
 
 周报可用`output.weekly_enabled=true`启用（默认false），`weekly_day`为ISO星期、默认5，`weekly_due_time`默认`18:00`；`weekly_start_date`可限制启用周范围。周五傍晚起有机会就生成；未成功则周末或恢复在线后的下一次运行补跑，不要求21点在线。宿主更新现有任务，周末只检查待补周报、不发普通提醒；Python不自行调度。聚合目标周配置工作日内的私有journal事实，跨周不混新一周；核对证据和最新状态，保留覆盖缺口，不用流水或当前待办快照冒充周成果。简短保留目标周五成果，周部分本周成果≤3、风险/未完成≤2、下周重点≤3，约400–600字。`report_date`固定为目标周配置周报日（默认周五），补跑仍沿用其review的MD/JSON、`brief:<report_date>:review`、`notify:<report_date>:review`，同周只一份，每日最多一份；已有title/folder/token不变，新报告日可用“YYYY-MM-DD 工作总结（含周报）”。后续同日普通总结保留周内容，独立需求/技术文档任务不受影响。
 
@@ -198,4 +198,4 @@ SQLite 的 `sources`、`goals`、`tasks`、`events` 表按稳定 ID 保存 JSON 
 
 状态检查必须早于采集：周末无待补直接结束；`delivered_unacknowledged`或`needs_completion=true`时，原样保存返回的`receipt`并直接确认，不再发布；`delivery_check_required`停止写入/发送，先核实未知结果。仅`due=true`进入`--weekly-due`。通知必须原样使用生成结果`weekly_delivery.notification_text`，由发布器附URL；completed后普通日终可沿用相同文本更新文档，但不得再次通知。收据字段为`week_start,report_date,document_key,report_hash,document_url,notification_key,message_id`，必须与真实manifest匹配，不自行编造。
 
-通知只在09:30/13:30，21点及其他非提醒窗口只用notification:null静默归档，不发本聊天复盘；generated周报等待下一提醒窗口，不能因仅文档all_delivered=true而complete。下一窗口复用原pinned文档+原weekly_delivery.notification_text完整包，发布器回读核验并附URL，检测手改冲突；不重新生成、改写或换key。文档与本人消息均验证后才确认收据。18:00仅为周报到期阈值，不创建18点复盘。
+日间复盘仍仅09:30/13:30；21点日报和生成后的周报另行主动通知，不受两个日间复盘时点限制。用原pinned文档及原`weekly_delivery.notification_text`完整包回读核验后附真实URL，不重新生成、改写或换key；只归档不能当已通知。文档与本人消息均验证后才确认收据，已送达的key不重复发送。18:00仅为周报到期阈值，不创建18点复盘或晚间工作安排。

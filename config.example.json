@@ -17,7 +17,7 @@
     "daytime_save_document": false,
     "review_times": ["09:30", "13:30"],
     "daily_save_time": "21:00",
-    "daily_notification_enabled": false,
+    "daily_notification_enabled": true,
     "daily_max_chars": 400,
     "daily_max_achievements": 3,
     "daily_max_next_steps": 3,

@@ -1,6 +1,6 @@
 interface:
   display_name: "个人工作助理"
-  short_description: "汇总已授权工作信息，09:30与13:30提醒，21点静默归档每日总结和弹性周报"
+  short_description: "汇总已授权工作信息，日间两次复盘，21点日报与弹性周报归档后通知本人"
   default_prompt: "使用 $personal-assistant 检查已连接的信息来源，安排今天的重点并给出建议。"
 
 policy:
